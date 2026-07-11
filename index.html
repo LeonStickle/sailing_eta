@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>Set &amp; Drift — Sailing ETA</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+  :root {
+    --bg-deep: #0E1B23;
+    --bg-panel: #16262F;
+    --bg-panel-raised: #1D323D;
+    --accent-brass: #C89B3C;
+    --accent-brass-dim: #8A6B2A;
+    --text-primary: #EDE6D6;
+    --text-muted: #7C8A90;
+    --signal-good: #6FBF8B;
+    --signal-warn: #C1553B;
+    --border-hairline: #263943;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: 'IBM Plex Sans', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  .wrap {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 24px 18px 60px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-hairline);
+  }
+
+  .brand {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    font-size: 26px;
+    letter-spacing: 0.04em;
+    color: var(--text-primary);
+    margin: 0 0 4px;
+  }
+  .brand .amp { color: var(--accent-brass); }
+
+  .tagline {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0;
+  }
+
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-hairline);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+
+  .field-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent-brass);
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  .dropzone {
+    border: 1.5px dashed var(--border-hairline);
+    border-radius: 8px;
+    padding: 28px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .dropzone:hover, .dropzone.drag-over {
+    border-color: var(--accent-brass);
+    background: rgba(200, 155, 60, 0.05);
+  }
+  .dropzone.has-file {
+    border-style: solid;
+    border-color: var(--signal-good);
+    background: rgba(111, 191, 139, 0.06);
+  }
+  .dropzone-icon {
+    font-size: 28px;
+    margin-bottom: 8px;
+    opacity: 0.7;
+  }
+  .dropzone-text {
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+  .dropzone-filename {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--signal-good);
+    margin-top: 6px;
+    word-break: break-all;
+  }
+  input[type="file"] { display: none; }
+
+  input[type="datetime-local"], select {
+    width: 100%;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-hairline);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 15px;
+    padding: 10px 12px;
+    color-scheme: dark;
+  }
+  input[type="datetime-local"]:focus, select:focus {
+    outline: 2px solid var(--accent-brass);
+    outline-offset: 1px;
+  }
+
+  .hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+
+  button.primary {
+    width: 100%;
+    background: var(--accent-brass);
+    color: var(--bg-deep);
+    border: none;
+    border-radius: 8px;
+    padding: 15px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.1s ease;
+  }
+  button.primary:hover:not(:disabled) { background: #D8AC50; }
+  button.primary:active:not(:disabled) { transform: scale(0.99); }
+  button.primary:disabled {
+    background: var(--bg-panel-raised);
+    color: var(--text-muted);
+    cursor: not-allowed;
+  }
+
+  .status {
+    display: none;
+    text-align: center;
+    padding: 24px 10px;
+  }
+  .status.active { display: block; }
+
+  .compass {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 14px;
+    position: relative;
+  }
+  .compass svg { animation: spin 2.6s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .compass svg { animation: none; }
+  }
+
+  .status-text {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .status-progress {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--accent-brass);
+    margin-top: 4px;
+  }
+
+  .error-box {
+    display: none;
+    background: rgba(193, 85, 59, 0.1);
+    border: 1px solid var(--signal-warn);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+  }
+  .error-box.active { display: block; }
+  .error-box .error-title {
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--signal-warn);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+
+  .results { display: none; }
+  .results.active { display: block; }
+
+  .summary-panel {
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--accent-brass-dim);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 18px;
+  }
+
+  .eta-headline {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--accent-brass);
+    line-height: 1.1;
+    margin-bottom: 2px;
+  }
+  .eta-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-top: 1px solid var(--border-hairline);
+    font-size: 13px;
+  }
+  .stat-row:first-of-type { border-top: none; }
+  .stat-label { color: var(--text-muted); }
+  .stat-value {
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .warn-banner {
+    background: rgba(193, 85, 59, 0.1);
+    border-left: 3px solid var(--signal-warn);
+    border-radius: 4px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-primary);
+  }
+  .warn-banner strong { color: var(--signal-warn); }
+
+  .legs-header {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 20px 0 10px;
+  }
+
+  .leg-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 4px;
+    border-top: 1px solid var(--border-hairline);
+  }
+  .leg-item:first-child { border-top: none; }
+
+  .leg-arrow {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .leg-arrow svg { width: 20px; height: 20px; }
+
+  .leg-info { flex: 1; min-width: 0; }
+  .leg-dist {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+  .leg-meta {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .leg-eta {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    text-align: right;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  footer {
+    text-align: center;
+    margin-top: 30px;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  footer a { color: var(--accent-brass); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <p class="brand">SET <span class="amp">&amp;</span> DRIFT</p>
+    <p class="tagline">Wind &middot; Wave &middot; Current &middot; ETA</p>
+  </header>
+
+  <div class="error-box" id="errorBox">
+    <div class="error-title">Couldn't calculate</div>
+    <div id="errorText"></div>
+  </div>
+
+  <div class="panel">
+    <span class="field-label">Route (GPX file)</span>
+    <div class="dropzone" id="dropzone">
+      <div class="dropzone-icon">&#9875;</div>
+      <div class="dropzone-text" id="dropzoneText">Tap to upload, or drop a GPX file here</div>
+      <div class="dropzone-filename" id="dropzoneFilename"></div>
+    </div>
+    <input type="file" id="fileInput" accept=".gpx">
+    <div class="hint" id="routeHint"></div>
+  </div>
+
+  <div class="panel">
+    <span class="field-label">Departure</span>
+    <input type="datetime-local" id="departureInput">
+    <div class="hint">Uses your device's local time zone automatically.</div>
+  </div>
+
+  <div class="panel">
+    <span class="field-label">Boat</span>
+    <select id="boatSelect">
+      <option value="generic">Generic 35ft cruiser (default)</option>
+      <option value="kitt25">Kitt 25 (Palle Mortensen) &mdash; estimated</option>
+    </select>
+    <div class="hint" id="boatHint">A rough stand-in polar &mdash; not this specific boat.</div>
+  </div>
+
+  <button class="primary" id="calcButton" disabled>Calculate ETA</button>
+
+  <div class="status" id="statusBox">
+    <div class="compass">
+      <svg viewBox="0 0 56 56" fill="none">
+        <circle cx="28" cy="28" r="25" stroke="#C89B3C" stroke-width="1.5" opacity="0.3"/>
+        <path d="M28 8 L33 28 L28 48 L23 28 Z" fill="#C89B3C" opacity="0.85"/>
+      </svg>
+    </div>
+    <div class="status-text" id="statusText">Charting your course&hellip;</div>
+    <div class="status-progress" id="statusProgress"></div>
+  </div>
+
+  <div class="results" id="results">
+    <div class="summary-panel">
+      <div class="eta-headline" id="etaHeadline">--:--</div>
+      <div class="eta-sub" id="etaSub">arriving --</div>
+      <div class="stat-row"><span class="stat-label">Distance</span><span class="stat-value" id="statDist">--</span></div>
+      <div class="stat-row"><span class="stat-label">Underway</span><span class="stat-value" id="statDuration">--</span></div>
+      <div class="stat-row"><span class="stat-label">Departure</span><span class="stat-value" id="statDeparture">--</span></div>
+    </div>
+
+    <div class="warn-banner" id="warnBanner" style="display:none;"></div>
+
+    <div class="legs-header">Leg by leg</div>
+    <div id="legsList"></div>
+  </div>
+
+  <footer>
+    Wind, wave &amp; current data from <a href="https://open-meteo.com" target="_blank">Open-Meteo</a>.
+    Boat speed uses a generic polar diagram &mdash; swap in your own boat's numbers for real accuracy.
+    Straight-line legs into the wind (&lt;40&deg;) can't actually be sailed direct &mdash; they'd need tacking, which isn't modeled here.
+  </footer>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Geometry helpers
+  // ---------------------------------------------------------------------
+  const EARTH_RADIUS_NM = 3440.065;
+  const toRad = d => d * Math.PI / 180;
+  const toDeg = r => r * 180 / Math.PI;
+
+  function haversineNm(p1, p2) {
+    const [lat1, lon1] = p1.map(toRad);
+    const [lat2, lon2] = p2.map(toRad);
+    const dlat = lat2 - lat1, dlon = lon2 - lon1;
+    const a = Math.sin(dlat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dlon/2)**2;
+    return 2 * EARTH_RADIUS_NM * Math.asin(Math.sqrt(a));
+  }
+
+  function bearingDeg(p1, p2) {
+    const [lat1, lon1] = p1.map(toRad);
+    const [lat2, lon2] = p2.map(toRad);
+    const dlon = lon2 - lon1;
+    const x = Math.sin(dlon) * Math.cos(lat2);
+    const y = Math.cos(lat1)*Math.sin(lat2) - Math.sin(lat1)*Math.cos(lat2)*Math.cos(dlon);
+    return (toDeg(Math.atan2(x, y)) + 360) % 360;
+  }
+
+  function destinationPoint(p1, bearing, distNm) {
+    const [lat1, lon1] = p1.map(toRad);
+    const brng = toRad(bearing);
+    const dR = distNm / EARTH_RADIUS_NM;
+    const lat2 = Math.asin(Math.sin(lat1)*Math.cos(dR) + Math.cos(lat1)*Math.sin(dR)*Math.cos(brng));
+    const lon2 = lon1 + Math.atan2(
+      Math.sin(brng)*Math.sin(dR)*Math.cos(lat1),
+      Math.cos(dR) - Math.sin(lat1)*Math.sin(lat2)
+    );
+    return [toDeg(lat2), toDeg(lon2)];
+  }
+
+  function signedAngleDiff(a, b) {
+    return ((a - b + 180) % 360 + 360) % 360 - 180;
+  }
+
+  // ---------------------------------------------------------------------
+  // Polar diagrams. GENERIC is a rough stand-in for a ~35ft cruiser-racer.
+  // KITT25 is an ESTIMATE built from published specs (no measured polar
+  // exists for this boat -- it's not ORC-registered): theoretical hull
+  // speed 6.3kt, SA/D 13.95 (yachtdatabase's own scale calls this
+  // "underpowered"), full keel (iron), motorsailer with a Relative Speed
+  // Performance rating of 5 (slower than 95% of comparable boats). Wider
+  // no-go angle (45 deg) and lower speeds throughout reflect the full keel
+  // and underpowered rig -- real performance will vary with sail trim,
+  // prop drag, and load, but this should track the boat's character much
+  // better than the generic table.
+  // ---------------------------------------------------------------------
+  const POLARS = {
+    generic: {
+      label: "Generic 35ft cruiser (default)",
+      noGoDeg: 40,
+      table: {
+        6:  {0:0.0, 30:0.0, 40:3.5, 50:4.4, 60:4.9, 75:5.2, 90:5.3, 110:5.2, 130:4.6, 150:3.5, 180:2.6},
+        10: {0:0.0, 30:0.0, 40:4.8, 50:5.7, 60:6.2, 75:6.6, 90:6.7, 110:6.6, 130:5.9, 150:4.6, 180:3.4},
+        14: {0:0.0, 30:0.0, 40:5.6, 50:6.5, 60:7.0, 75:7.4, 90:7.5, 110:7.4, 130:6.7, 150:5.4, 180:4.1},
+        18: {0:0.0, 30:0.0, 40:6.0, 50:6.9, 60:7.4, 75:7.8, 90:7.9, 110:7.8, 130:7.1, 150:5.9, 180:4.6},
+        22: {0:0.0, 30:0.0, 40:6.2, 50:7.0, 60:7.5, 75:7.9, 90:8.0, 110:7.9, 130:7.3, 150:6.2, 180:4.9},
+        28: {0:0.0, 30:0.0, 40:6.1, 50:6.9, 60:7.4, 75:7.7, 90:7.8, 110:7.7, 130:7.2, 150:6.3, 180:5.1},
+      }
+    },
+    kitt25: {
+      label: "Kitt 25 (Palle Mortensen) \u2014 estimated",
+      noGoDeg: 45,
+      table: {
+        6:  {0:0.0, 30:0.0, 45:0.0, 60:2.0, 75:2.4, 90:2.6, 110:2.5, 130:2.2, 150:1.7, 180:1.3},
+        10: {0:0.0, 30:0.0, 45:0.0, 60:2.8, 75:3.3, 90:3.6, 110:3.5, 130:3.1, 150:2.4, 180:1.8},
+        14: {0:0.0, 30:0.0, 45:1.8, 60:3.3, 75:3.9, 90:4.2, 110:4.1, 130:3.6, 150:2.9, 180:2.2},
+        18: {0:0.0, 30:0.0, 45:2.2, 60:3.6, 75:4.2, 90:4.6, 110:4.5, 130:4.0, 150:3.2, 180:2.5},
+        22: {0:0.0, 30:0.0, 45:2.4, 60:3.8, 75:4.4, 90:4.8, 110:4.7, 130:4.2, 150:3.4, 180:2.7},
+        28: {0:0.0, 30:0.0, 45:2.3, 60:3.7, 75:4.3, 90:4.7, 110:4.6, 130:4.1, 150:3.4, 180:2.8},
+      }
+    }
+  };
+
+  function interp1(x, xs, ys) {
+    if (x <= xs[0]) return ys[0];
+    if (x >= xs[xs.length-1]) return ys[ys.length-1];
+    for (let i = 0; i < xs.length - 1; i++) {
+      if (xs[i] <= x && x <= xs[i+1]) {
+        const t = (x - xs[i]) / (xs[i+1] - xs[i]);
+        return ys[i] + t * (ys[i+1] - ys[i]);
+      }
+    }
+    return ys[ys.length-1];
+  }
+
+  function boatSpeedFromPolar(twsKts, twaDeg, polarTable) {
+    let twa = Math.abs(twaDeg) % 360;
+    if (twa > 180) twa = 360 - twa;
+
+    const twsBins = Object.keys(polarTable).map(Number).sort((a,b)=>a-b);
+    const lowerTws = Math.max(...twsBins.filter(t => t <= twsKts), twsBins[0]);
+    const upperTws = Math.min(...twsBins.filter(t => t >= twsKts), twsBins[twsBins.length-1]);
+
+    function speedAt(twsBin) {
+      const row = polarTable[twsBin];
+      const twaBins = Object.keys(row).map(Number).sort((a,b)=>a-b);
+      const ys = twaBins.map(t => row[t]);
+      return interp1(twa, twaBins, ys);
+    }
+
+    const sLower = speedAt(lowerTws);
+    if (upperTws === lowerTws) return sLower;
+    const sUpper = speedAt(upperTws);
+    const t = (twsKts - lowerTws) / (upperTws - lowerTws);
+    return sLower + t * (sUpper - sLower);
+  }
+
+  function waveSpeedFactor(waveHeightM, waveDirDeg, courseDeg) {
+    if (waveHeightM == null) return 1.0;
+    const h = waveHeightM;
+    let baseReduction;
+    if (h <= 0.5) baseReduction = 0.0;
+    else if (h <= 1.0) baseReduction = 0.03;
+    else if (h <= 1.5) baseReduction = 0.08;
+    else if (h <= 2.0) baseReduction = 0.14;
+    else if (h <= 3.0) baseReduction = 0.24;
+    else if (h <= 4.0) baseReduction = 0.38;
+    else baseReduction = 0.50;
+
+    let angleMultiplier = 1.0;
+    if (waveDirDeg != null) {
+      const waveAngle = Math.abs(signedAngleDiff(waveDirDeg, courseDeg));
+      angleMultiplier = 1.3 - 0.6 * (waveAngle / 180.0);
+    }
+    const effectiveReduction = Math.min(0.7, baseReduction * angleMultiplier);
+    return Math.max(0.3, 1.0 - effectiveReduction);
+  }
+
+  function vmgOverGround(bsp, headingDeg, currentSpeedKts, currentDirDeg, courseDeg) {
+    const boatX = bsp * Math.sin(toRad(headingDeg));
+    const boatY = bsp * Math.cos(toRad(headingDeg));
+    let curX = 0, curY = 0;
+    if (currentSpeedKts) {
+      const cDir = currentDirDeg || 0;
+      curX = currentSpeedKts * Math.sin(toRad(cDir));
+      curY = currentSpeedKts * Math.cos(toRad(cDir));
+    }
+    const sogX = boatX + curX, sogY = boatY + curY;
+    const courseX = Math.sin(toRad(courseDeg)), courseY = Math.cos(toRad(courseDeg));
+    return sogX * courseX + sogY * courseY;
+  }
+
+  // ---------------------------------------------------------------------
+  // GPX parsing
+  // ---------------------------------------------------------------------
+  function parseGpx(text) {
+    const doc = new DOMParser().parseFromString(text, "application/xml");
+    if (doc.querySelector("parsererror")) {
+      throw new Error("This file doesn't look like valid GPX/XML.");
+    }
+    const rtept = doc.querySelectorAll("rte rtept");
+    if (rtept.length > 0) {
+      return Array.from(rtept).map(p => [parseFloat(p.getAttribute("lat")), parseFloat(p.getAttribute("lon"))]);
+    }
+    const trkpt = doc.querySelectorAll("trk trkseg trkpt");
+    if (trkpt.length > 0) {
+      return Array.from(trkpt).map(p => [parseFloat(p.getAttribute("lat")), parseFloat(p.getAttribute("lon"))]);
+    }
+    throw new Error("No route or track points found in this GPX file. (Saved places alone aren't enough — export an actual route or track.)");
+  }
+
+  // ---------------------------------------------------------------------
+  // Wind / marine fetching (Open-Meteo, free, no key), cached by rounded coord
+  // ---------------------------------------------------------------------
+  const windCache = new Map();
+  const marineCache = new Map();
+
+  function cacheKey(lat, lon) {
+    return `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  }
+
+  async function fetchWindSeries(lat, lon) {
+    const key = cacheKey(lat, lon);
+    if (windCache.has(key)) return windCache.get(key);
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=kn&timezone=UTC&forecast_days=10`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Wind lookup failed (${resp.status}) near ${lat.toFixed(2)},${lon.toFixed(2)}`);
+    const json = await resp.json();
+    const series = {
+      times: json.hourly.time.map(t => new Date(t + "Z").getTime()),
+      speed: json.hourly.wind_speed_10m,
+      dir: json.hourly.wind_direction_10m,
+    };
+    windCache.set(key, series);
+    return series;
+  }
+
+  async function fetchMarineSeries(lat, lon) {
+    const key = cacheKey(lat, lon);
+    if (marineCache.has(key)) return marineCache.get(key);
+    const url = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}` +
+      `&hourly=wave_height,wave_direction,ocean_current_velocity,ocean_current_direction&timezone=UTC&forecast_days=10`;
+    let series = null;
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.hourly) {
+          series = {
+            times: json.hourly.time.map(t => new Date(t + "Z").getTime()),
+            waveHeight: json.hourly.wave_height,
+            waveDir: json.hourly.wave_direction,
+            currentSpeed: json.hourly.ocean_current_velocity,
+            currentDir: json.hourly.ocean_current_direction,
+          };
+        }
+      }
+    } catch (e) {
+      // marine data unavailable at this point (e.g. inland) -- degrade gracefully
+      series = null;
+    }
+    marineCache.set(key, series);
+    return series;
+  }
+
+  function nearestIndex(times, targetMs) {
+    let lo = 0, hi = times.length - 1, best = 0, bestDiff = Infinity;
+    for (let i = 0; i < times.length; i++) {
+      const diff = Math.abs(times[i] - targetMs);
+      if (diff < bestDiff) { bestDiff = diff; best = i; }
+    }
+    return best;
+  }
+
+  // ---------------------------------------------------------------------
+  // Route simulation
+  // ---------------------------------------------------------------------
+  const STEP_NM = 3.0;
+  const KMH_TO_KTS = 0.539957;
+
+  function buildSamplePoints(route) {
+    const points = [];
+    for (let i = 0; i < route.length - 1; i++) {
+      const legStart = route[i], legEnd = route[i+1];
+      const legDist = haversineNm(legStart, legEnd);
+      const course = bearingDeg(legStart, legEnd);
+      let remaining = legDist, pos = legStart;
+      while (remaining > 1e-6) {
+        points.push(pos);
+        const chunk = Math.min(STEP_NM, remaining);
+        pos = destinationPoint(pos, course, chunk);
+        remaining -= chunk;
+      }
+    }
+    points.push(route[route.length - 1]);
+    return points;
+  }
+
+  async function prefetchAll(samplePoints, onProgress) {
+    const uniqueKeys = new Map();
+    for (const [lat, lon] of samplePoints) {
+      const key = cacheKey(lat, lon);
+      if (!uniqueKeys.has(key)) uniqueKeys.set(key, [lat, lon]);
+    }
+    const entries = Array.from(uniqueKeys.values());
+    let done = 0;
+    const concurrency = 4;
+    let idx = 0;
+
+    async function worker() {
+      while (idx < entries.length) {
+        const myIdx = idx++;
+        const [lat, lon] = entries[myIdx];
+        await Promise.all([fetchWindSeries(lat, lon), fetchMarineSeries(lat, lon)]);
+        done++;
+        onProgress(done, entries.length);
+      }
+    }
+    const workers = [];
+    for (let i = 0; i < concurrency; i++) workers.push(worker());
+    await Promise.all(workers);
+  }
+
+  function simulateRoute(route, startTimeMs, polarTable) {
+    const legs = [];
+    let currentTimeMs = startTimeMs;
+
+    for (let i = 0; i < route.length - 1; i++) {
+      const legStart = route[i], legEnd = route[i+1];
+      const legDist = haversineNm(legStart, legEnd);
+      const course = bearingDeg(legStart, legEnd);
+      let remaining = legDist, pos = legStart;
+      const legStartTimeMs = currentTimeMs;
+      const bsps = [], sogs = [], twss = [], twas = [], waveHs = [], currs = [];
+
+      while (remaining > 1e-6) {
+        const [lat, lon] = pos;
+        const windSeries = windCache.get(cacheKey(lat, lon));
+        const marineSeries = marineCache.get(cacheKey(lat, lon));
+
+        const wIdx = nearestIndex(windSeries.times, currentTimeMs);
+        const twsKts = windSeries.speed[wIdx];
+        const windDirDeg = windSeries.dir[wIdx];
+
+        let waveHeightM = null, waveDirDeg = null, currentSpeedKts = null, currentDirDeg = null;
+        if (marineSeries) {
+          const mIdx = nearestIndex(marineSeries.times, currentTimeMs);
+          waveHeightM = marineSeries.waveHeight ? marineSeries.waveHeight[mIdx] : null;
+          waveDirDeg = marineSeries.waveDir ? marineSeries.waveDir[mIdx] : null;
+          const rawCurrent = marineSeries.currentSpeed ? marineSeries.currentSpeed[mIdx] : null;
+          currentSpeedKts = rawCurrent != null ? rawCurrent * KMH_TO_KTS : null;
+          currentDirDeg = marineSeries.currentDir ? marineSeries.currentDir[mIdx] : null;
+        }
+
+        const twa = signedAngleDiff(windDirDeg, course);
+        let bsp = boatSpeedFromPolar(twsKts, twa, polarTable);
+        bsp *= waveSpeedFactor(waveHeightM, waveDirDeg, course);
+        bsp = Math.max(bsp, 0.5);
+
+        let vmg = vmgOverGround(bsp, course, currentSpeedKts, currentDirDeg, course);
+        vmg = Math.max(vmg, 0.3);
+
+        const chunk = Math.min(STEP_NM, remaining);
+        const hours = chunk / vmg;
+        currentTimeMs += hours * 3600 * 1000;
+        pos = destinationPoint(pos, course, chunk);
+        remaining -= chunk;
+
+        bsps.push(bsp); sogs.push(vmg); twss.push(twsKts); twas.push(Math.abs(twa));
+        if (waveHeightM != null) waveHs.push(waveHeightM);
+        if (currentSpeedKts != null) currs.push(currentSpeedKts);
+      }
+
+      const avg = arr => arr.reduce((a,b)=>a+b,0) / arr.length;
+      legs.push({
+        start: legStart, end: legEnd, distanceNm: legDist,
+        startTimeMs: legStartTimeMs, endTimeMs: currentTimeMs,
+        avgBoatSpeedKts: avg(bsps), avgSogKts: avg(sogs),
+        avgTwsKts: avg(twss), avgTwaDeg: avg(twas),
+        avgWaveHeightM: waveHs.length ? avg(waveHs) : null,
+        avgCurrentKts: currs.length ? avg(currs) : null,
+      });
+    }
+    return { legs, etaMs: currentTimeMs };
+  }
+
+  // ---------------------------------------------------------------------
+  // UI wiring
+  // ---------------------------------------------------------------------
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  const dropzoneText = document.getElementById('dropzoneText');
+  const dropzoneFilename = document.getElementById('dropzoneFilename');
+  const routeHint = document.getElementById('routeHint');
+  const departureInput = document.getElementById('departureInput');
+  const boatSelect = document.getElementById('boatSelect');
+  const boatHint = document.getElementById('boatHint');
+  const calcButton = document.getElementById('calcButton');
+  const statusBox = document.getElementById('statusBox');
+  const statusText = document.getElementById('statusText');
+  const statusProgress = document.getElementById('statusProgress');
+  const resultsBox = document.getElementById('results');
+  const errorBox = document.getElementById('errorBox');
+  const errorText = document.getElementById('errorText');
+
+  let currentRoute = null;
+
+  // default departure: 1 hour from now, local time
+  (function setDefaultDeparture() {
+    const d = new Date(Date.now() + 60*60*1000);
+    d.setMinutes(0, 0, 0);
+    const pad = n => String(n).padStart(2, '0');
+    const local = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    departureInput.value = local;
+  })();
+
+  function showError(msg) {
+    errorText.textContent = msg;
+    errorBox.classList.add('active');
+  }
+  function clearError() {
+    errorBox.classList.remove('active');
+  }
+
+  function checkReady() {
+    calcButton.disabled = !(currentRoute && departureInput.value);
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) handleFile(fileInput.files[0]);
+  });
+
+  function handleFile(file) {
+    clearError();
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const route = parseGpx(reader.result);
+        if (route.length < 2) throw new Error("That route only has one point -- need at least two to sail between.");
+        currentRoute = route;
+        dropzone.classList.add('has-file');
+        dropzoneText.textContent = "Route loaded";
+        dropzoneFilename.textContent = file.name;
+        const totalNm = route.slice(0,-1).reduce((sum, p, i) => sum + haversineNm(p, route[i+1]), 0);
+        routeHint.textContent = `${route.length} waypoints, ${totalNm.toFixed(1)} nm total`;
+        checkReady();
+      } catch (err) {
+        currentRoute = null;
+        dropzone.classList.remove('has-file');
+        dropzoneText.textContent = "Tap to upload, or drop a GPX file here";
+        dropzoneFilename.textContent = "";
+        routeHint.textContent = "";
+        showError(err.message);
+        checkReady();
+      }
+    };
+    reader.onerror = () => showError("Couldn't read that file. Try again?");
+    reader.readAsText(file);
+  }
+
+  departureInput.addEventListener('change', checkReady);
+
+  const BOAT_HINTS = {
+    generic: "A rough stand-in polar \u2014 not this specific boat.",
+    kitt25: "Estimated from published specs (hull speed, SA/D, full keel) \u2014 no measured polar exists for this boat. Treat as a rough guide, not exact.",
+  };
+  boatSelect.addEventListener('change', () => {
+    boatHint.textContent = BOAT_HINTS[boatSelect.value] || "";
+  });
+
+  function fmtDuration(hours) {
+    const h = Math.floor(hours);
+    const m = Math.round((hours - h) * 60);
+    if (h === 0) return `${m} min`;
+    return `${h}h ${m}m`;
+  }
+
+  function fmtTime(ms) {
+    return new Date(ms).toLocaleString(undefined, {
+      weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+  function fmtTimeShort(ms) {
+    return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function twaArrowSvg(twaDeg, favorable) {
+    const color = favorable === 'nogo' ? 'var(--signal-warn)' : (favorable === 'good' ? 'var(--signal-good)' : 'var(--text-muted)');
+    // arrow rotated to represent wind angle relative to bow (0 = pointing up/forward)
+    const rotation = twaDeg;
+    return `<svg viewBox="0 0 20 20"><g transform="rotate(${rotation} 10 10)">
+      <path d="M10 3 L14 13 L10 10.5 L6 13 Z" fill="${color}"/>
+    </g></svg>`;
+  }
+
+  function renderResults(route, legs, etaMs, startMs, noGoDeg) {
+    const totalNm = legs.reduce((s,l) => s + l.distanceNm, 0);
+    const totalHours = (etaMs - startMs) / 3600000;
+
+    document.getElementById('etaHeadline').textContent = fmtTimeShort(etaMs);
+    document.getElementById('etaSub').textContent = `arriving ${fmtTime(etaMs)}`;
+    document.getElementById('statDist').textContent = `${totalNm.toFixed(1)} nm`;
+    document.getElementById('statDuration').textContent = fmtDuration(totalHours);
+    document.getElementById('statDeparture').textContent = fmtTime(startMs);
+
+    const nogoLegs = legs.filter(l => l.avgTwaDeg < noGoDeg);
+    const warnBanner = document.getElementById('warnBanner');
+    if (nogoLegs.length > 0) {
+      const nogoNm = nogoLegs.reduce((s,l) => s + l.distanceNm, 0);
+      warnBanner.style.display = 'block';
+      warnBanner.innerHTML = `<strong>${nogoLegs.length} leg${nogoLegs.length>1?'s':''}</strong> (${nogoNm.toFixed(1)} nm) point too close to the wind to sail directly &mdash; you'd need to tack through these sections. The ETA below doesn't account for that extra distance, so treat it as optimistic for those stretches.`;
+    } else {
+      warnBanner.style.display = 'none';
+    }
+
+    const legsList = document.getElementById('legsList');
+    legsList.innerHTML = legs.map(leg => {
+      const favorable = leg.avgTwaDeg < noGoDeg ? 'nogo' : (leg.avgTwaDeg > 60 ? 'good' : 'neutral');
+      const durH = (leg.endTimeMs - leg.startTimeMs) / 3600000;
+      let extras = [];
+      if (leg.avgWaveHeightM != null) extras.push(`wave ${leg.avgWaveHeightM.toFixed(1)}m`);
+      if (leg.avgCurrentKts != null) extras.push(`current ${leg.avgCurrentKts.toFixed(1)}kt`);
+      const extraStr = extras.length ? ` &middot; ${extras.join(', ')}` : '';
+      return `
+        <div class="leg-item">
+          <div class="leg-arrow">${twaArrowSvg(0, favorable)}</div>
+          <div class="leg-info">
+            <div class="leg-dist">${leg.distanceNm.toFixed(1)} nm &middot; ${fmtDuration(durH)}</div>
+            <div class="leg-meta">${leg.avgBoatSpeedKts.toFixed(1)}kt boat, ${leg.avgSogKts.toFixed(1)}kt SOG &middot; TWS ${leg.avgTwsKts.toFixed(0)}kt, TWA ${leg.avgTwaDeg.toFixed(0)}&deg;${extraStr}</div>
+          </div>
+          <div class="leg-eta">${fmtTimeShort(leg.endTimeMs)}</div>
+        </div>`;
+    }).join('');
+
+    resultsBox.classList.add('active');
+  }
+
+  calcButton.addEventListener('click', async () => {
+    if (!currentRoute) return;
+    clearError();
+    resultsBox.classList.remove('active');
+    calcButton.disabled = true;
+    statusBox.classList.add('active');
+    statusText.textContent = "Charting your course…";
+    statusProgress.textContent = "";
+
+    try {
+      const startTimeMs = new Date(departureInput.value).getTime();
+      if (isNaN(startTimeMs)) throw new Error("Pick a valid departure date and time.");
+
+      const samplePoints = buildSamplePoints(currentRoute);
+
+      statusText.textContent = "Reading wind over water…";
+      await prefetchAll(samplePoints, (done, total) => {
+        statusProgress.textContent = `${done} / ${total} points`;
+      });
+
+      statusText.textContent = "Working out boat speed…";
+      await new Promise(r => setTimeout(r, 50)); // let UI paint
+
+      const { legs, etaMs } = simulateRoute(currentRoute, startTimeMs, POLARS[boatSelect.value].table);
+      renderResults(currentRoute, legs, etaMs, startTimeMs, POLARS[boatSelect.value].noGoDeg);
+    } catch (err) {
+      showError(err.message || "Something went wrong fetching weather data. Check your connection and try again.");
+    } finally {
+      statusBox.classList.remove('active');
+      calcButton.disabled = false;
+    }
+  });
+
+  checkReady();
+})();
+</script>
+</body>
+</html>
