@@ -154,6 +154,14 @@
     overflow: hidden;
     margin-bottom: 10px;
   }
+  #resultsMapContainer {
+    width: 100%;
+    height: 220px;
+    border-radius: 8px;
+    border: 1px solid var(--border-hairline);
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
   .leaflet-container { background: var(--bg-panel-raised) !important; }
 
   .map-controls {
@@ -487,6 +495,8 @@
     </div>
 
     <div class="warn-banner" id="warnBanner" style="display:none;"></div>
+
+    <div id="resultsMapContainer"></div>
 
     <div class="legs-header">Leg by leg</div>
     <div id="legsList"></div>
@@ -1313,6 +1323,50 @@
     }).join('');
 
     resultsBox.classList.add('active');
+    renderRouteOnMap(legs, noGoDeg);
+  }
+
+  // ---------------------------------------------------------------------
+  // Results map: shows the computed route path
+  // ---------------------------------------------------------------------
+  let resultsMap = null;
+
+  function renderRouteOnMap(legs, noGoDeg) {
+    if (typeof L === 'undefined') return; // Leaflet failed to load -- skip silently, rest of results still work
+
+    if (!resultsMap) {
+      resultsMap = L.map('resultsMapContainer', { zoomControl: true, attributionControl: true });
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        maxZoom: 18,
+      }).addTo(resultsMap);
+    } else {
+      resultsMap.eachLayer(layer => {
+        if (!(layer instanceof L.TileLayer)) resultsMap.removeLayer(layer);
+      });
+    }
+
+    const points = [legs[0].start, ...legs.map(l => l.end)];
+
+    legs.forEach(leg => {
+      const nogo = leg.avgTwaDeg < noGoDeg;
+      L.polyline([leg.start, leg.end], {
+        color: nogo ? '#C1553B' : '#C89B3C',
+        weight: 3,
+        opacity: 0.85,
+      }).addTo(resultsMap);
+    });
+
+    L.circleMarker(points[0], { radius: 7, color: '#6FBF8B', fillColor: '#6FBF8B', fillOpacity: 0.9, weight: 2 })
+      .addTo(resultsMap).bindTooltip('Start', { permanent: false });
+    L.circleMarker(points[points.length - 1], { radius: 7, color: '#C1553B', fillColor: '#C1553B', fillOpacity: 0.9, weight: 2 })
+      .addTo(resultsMap).bindTooltip('Finish', { permanent: false });
+
+    const bounds = L.latLngBounds(points);
+    setTimeout(() => {
+      resultsMap.invalidateSize();
+      resultsMap.fitBounds(bounds, { padding: [24, 24] });
+    }, 50);
   }
 
   calcButton.addEventListener('click', async () => {
