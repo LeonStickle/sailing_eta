@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <title>Set &amp; Drift — Sailing ETA</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
@@ -115,6 +116,79 @@
     word-break: break-all;
   }
   input[type="file"] { display: none; }
+
+  .input-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .input-tab {
+    flex: 1;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-hairline);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 9px 6px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s ease;
+  }
+  .input-tab.active {
+    background: rgba(200, 155, 60, 0.12);
+    border-color: var(--accent-brass);
+    color: var(--accent-brass);
+  }
+
+  .map-section { display: none; }
+  .map-section.active { display: block; }
+
+  #mapContainer {
+    width: 100%;
+    height: 260px;
+    border-radius: 8px;
+    border: 1px solid var(--border-hairline);
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .leaflet-container { background: var(--bg-panel-raised) !important; }
+
+  .map-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .map-btn {
+    flex: 1;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-hairline);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 9px 6px;
+    cursor: pointer;
+  }
+  .map-btn:hover { border-color: var(--accent-brass); }
+  .map-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .map-btn.primary-map-btn {
+    background: var(--accent-brass);
+    color: var(--bg-deep);
+    border-color: var(--accent-brass);
+    font-weight: 600;
+  }
+
+  .map-point-count {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .map-point-count strong { color: var(--accent-brass); }
 
   input[type="datetime-local"], select {
     width: 100%;
@@ -338,14 +412,41 @@
   </div>
 
   <div class="panel">
-    <span class="field-label">Route (GPX file)</span>
-    <div class="dropzone" id="dropzone">
-      <div class="dropzone-icon">&#9875;</div>
-      <div class="dropzone-text" id="dropzoneText">Tap to upload, or drop a GPX file here</div>
-      <div class="dropzone-filename" id="dropzoneFilename"></div>
+    <span class="field-label">Route</span>
+    <div class="input-tabs">
+      <div class="input-tab active" id="tabGpx">Upload GPX</div>
+      <div class="input-tab" id="tabMap">Tap on map</div>
     </div>
-    <input type="file" id="fileInput" accept=".gpx">
+
+    <div id="gpxSection">
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone-icon">&#9875;</div>
+        <div class="dropzone-text" id="dropzoneText">Tap to upload, or drop a GPX file here</div>
+        <div class="dropzone-filename" id="dropzoneFilename"></div>
+      </div>
+      <input type="file" id="fileInput" accept=".gpx">
+    </div>
+
+    <div class="map-section" id="mapSection">
+      <div id="mapContainer"></div>
+      <div class="map-point-count" id="mapPointCount">Tap the map to place a point</div>
+      <div class="map-controls">
+        <button class="map-btn" id="mapUndoBtn" disabled>Undo</button>
+        <button class="map-btn" id="mapClearBtn" disabled>Clear</button>
+        <button class="map-btn primary-map-btn" id="mapUseBtn" disabled>Use these points</button>
+      </div>
+    </div>
+
     <div class="hint" id="routeHint"></div>
+  </div>
+
+  <div class="panel">
+    <span class="field-label">Routing mode</span>
+    <select id="modeSelect">
+      <option value="fixed">Follow the uploaded route exactly</option>
+      <option value="fastest">Find fastest route (start &rarr; end, may tack)</option>
+    </select>
+    <div class="hint" id="modeHint">Uses the route's waypoints as sailed, straight between them.</div>
   </div>
 
   <div class="panel">
@@ -398,6 +499,7 @@
   </footer>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 (function() {
   "use strict";
@@ -746,6 +848,184 @@
   }
 
   // ---------------------------------------------------------------------
+  // Fastest-route search (isochrone method): instead of following a fixed
+  // line, this spreads a wavefront of reachable points outward from the
+  // start, testing many possible headings against the wind at each point
+  // in time, keeping only the furthest-advanced point in each direction,
+  // and repeating until the destination is reachable. This is what lets it
+  // find tacking routes through wind angles a straight line can't sail.
+  // ---------------------------------------------------------------------
+
+  function buildGrid(start, end, gridN) {
+    const directNm = haversineNm(start, end);
+    const margin = Math.max(directNm * 0.5, 3); // nm of margin around the direct line
+    const lats = [start[0], end[0]], lons = [start[1], end[1]];
+    const latMarginDeg = margin / 60; // ~60nm per degree latitude
+    const lonMarginDeg = margin / (60 * Math.cos(toRad((lats[0]+lats[1])/2)));
+    const latMin = Math.min(...lats) - latMarginDeg, latMax = Math.max(...lats) + latMarginDeg;
+    const lonMin = Math.min(...lons) - lonMarginDeg, lonMax = Math.max(...lons) + lonMarginDeg;
+
+    const grid = [];
+    for (let i = 0; i < gridN; i++) {
+      for (let j = 0; j < gridN; j++) {
+        const lat = latMin + (latMax - latMin) * (i / (gridN - 1));
+        const lon = lonMin + (lonMax - lonMin) * (j / (gridN - 1));
+        grid.push([lat, lon]);
+      }
+    }
+    return grid;
+  }
+
+  function nearestGridSeries(grid, lat, lon) {
+    let best = null, bestD = Infinity;
+    for (const [glat, glon] of grid) {
+      const d = (glat - lat) ** 2 + (glon - lon) ** 2;
+      if (d < bestD) { bestD = d; best = [glat, glon]; }
+    }
+    const key = cacheKey(best[0], best[1]);
+    return { wind: windCache.get(key), marine: marineCache.get(key) };
+  }
+
+  function sampleAt(grid, lat, lon, timeMs) {
+    const { wind, marine } = nearestGridSeries(grid, lat, lon);
+    const wIdx = nearestIndex(wind.times, timeMs);
+    const twsKts = wind.speed[wIdx];
+    const windDirDeg = wind.dir[wIdx];
+    let waveHeightM = null, waveDirDeg = null, currentSpeedKts = null, currentDirDeg = null;
+    if (marine) {
+      const mIdx = nearestIndex(marine.times, timeMs);
+      waveHeightM = marine.waveHeight ? marine.waveHeight[mIdx] : null;
+      waveDirDeg = marine.waveDir ? marine.waveDir[mIdx] : null;
+      const raw = marine.currentSpeed ? marine.currentSpeed[mIdx] : null;
+      currentSpeedKts = raw != null ? raw * KMH_TO_KTS : null;
+      currentDirDeg = marine.currentDir ? marine.currentDir[mIdx] : null;
+    }
+    return { twsKts, windDirDeg, waveHeightM, waveDirDeg, currentSpeedKts, currentDirDeg };
+  }
+
+  function computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, onProgress) {
+    const directNm = haversineNm(start, end);
+    const refBearing = bearingDeg(start, end);
+    const timeStepHours = directNm > 30 ? 1.0 : (directNm > 10 ? 0.5 : 0.25);
+    const maxIterations = 80;
+    const headingCount = 24; // 15-degree increments
+    const binWidthDeg = 5;
+    const binRangeDeg = 110; // search headings up to 110 deg either side of direct bearing
+
+    let frontier = [{
+      lat: start[0], lon: start[1], timeMs: startTimeMs,
+      path: [{ lat: start[0], lon: start[1], timeMs: startTimeMs, twsKts: null, twaDeg: null,
+                boatSpeedKts: null, sogKts: null, waveHeightM: null, currentKts: null }],
+    }];
+
+    for (let iter = 0; iter < maxIterations; iter++) {
+      onProgress(iter, maxIterations);
+
+      // Check if any frontier point can reach the destination directly this step
+      let bestFinish = null;
+      for (const pt of frontier) {
+        const remainingNm = haversineNm([pt.lat, pt.lon], end);
+        if (remainingNm < 0.05) {
+          if (!bestFinish || pt.timeMs < bestFinish.timeMs) bestFinish = { point: pt, extraLeg: null, timeMs: pt.timeMs };
+          continue;
+        }
+        const courseToEnd = bearingDeg([pt.lat, pt.lon], end);
+        const sample = sampleAt(grid, pt.lat, pt.lon, pt.timeMs);
+        const twa = signedAngleDiff(sample.windDirDeg, courseToEnd);
+        if (Math.abs(twa) < noGoDeg) continue; // can't point directly at destination
+        let bsp = boatSpeedFromPolar(sample.twsKts, twa, polarTable);
+        bsp *= waveSpeedFactor(sample.waveHeightM, sample.waveDirDeg, courseToEnd);
+        bsp = Math.max(bsp, 0.5);
+        const vmg = vmgOverGround(bsp, courseToEnd, sample.currentSpeedKts, sample.currentDirDeg, courseToEnd);
+        if (vmg <= 0.3) continue;
+        const hoursNeeded = remainingNm / vmg;
+        if (hoursNeeded > timeStepHours * 1.5) continue; // too far to finish this step, keep spreading instead
+        const finishTimeMs = pt.timeMs + hoursNeeded * 3600 * 1000;
+        if (!bestFinish || finishTimeMs < bestFinish.timeMs) {
+          bestFinish = {
+            point: pt, timeMs: finishTimeMs,
+            extraLeg: { lat: end[0], lon: end[1], timeMs: finishTimeMs, twsKts: sample.twsKts, twaDeg: twa,
+                        boatSpeedKts: bsp, sogKts: vmg, waveHeightM: sample.waveHeightM, currentKts: sample.currentSpeedKts },
+          };
+        }
+      }
+      if (bestFinish) {
+        const finalPath = bestFinish.point.path.slice();
+        if (bestFinish.extraLeg) finalPath.push(bestFinish.extraLeg);
+        return { path: finalPath, etaMs: bestFinish.timeMs, converged: true };
+      }
+
+      // Expand frontier: for each point, try candidate headings, collect new candidates
+      const candidates = [];
+      for (const pt of frontier) {
+        const sample = sampleAt(grid, pt.lat, pt.lon, pt.timeMs);
+        for (let h = 0; h < headingCount; h++) {
+          const heading = (h / headingCount) * 360;
+          const twa = signedAngleDiff(sample.windDirDeg, heading);
+          if (Math.abs(twa) < noGoDeg) continue;
+          let bsp = boatSpeedFromPolar(sample.twsKts, twa, polarTable);
+          bsp *= waveSpeedFactor(sample.waveHeightM, sample.waveDirDeg, heading);
+          bsp = Math.max(bsp, 0.5);
+          const vmg = vmgOverGround(bsp, heading, sample.currentSpeedKts, sample.currentDirDeg, heading);
+          const distNm = vmg * timeStepHours;
+          if (distNm <= 0) continue;
+          const [newLat, newLon] = destinationPoint([pt.lat, pt.lon], heading, distNm);
+          const newTimeMs = pt.timeMs + timeStepHours * 3600 * 1000;
+          const bearingFromStart = bearingDeg(start, [newLat, newLon]);
+          const distFromStart = haversineNm(start, [newLat, newLon]);
+          candidates.push({
+            lat: newLat, lon: newLon, timeMs: newTimeMs, bearingFromStart, distFromStart,
+            path: pt.path.concat([{ lat: newLat, lon: newLon, timeMs: newTimeMs,
+              twsKts: sample.twsKts, twaDeg: twa, boatSpeedKts: bsp, sogKts: vmg,
+              waveHeightM: sample.waveHeightM, currentKts: sample.currentSpeedKts }]),
+          });
+        }
+      }
+      if (candidates.length === 0) {
+        return { path: frontier[0] ? frontier[0].path : [], etaMs: frontier[0] ? frontier[0].timeMs : startTimeMs, converged: false };
+      }
+
+      // Prune: bin by bearing-from-start relative to refBearing, keep furthest-advanced per bin
+      const bins = new Map();
+      for (const c of candidates) {
+        let rel = signedAngleDiff(c.bearingFromStart, refBearing);
+        if (Math.abs(rel) > binRangeDeg) continue;
+        const binIdx = Math.round(rel / binWidthDeg);
+        const existing = bins.get(binIdx);
+        if (!existing || c.distFromStart > existing.distFromStart) bins.set(binIdx, c);
+      }
+      frontier = Array.from(bins.values());
+      if (frontier.length === 0) {
+        return { path: candidates[0].path, etaMs: candidates[0].timeMs, converged: false };
+      }
+    }
+
+    // Didn't converge within maxIterations -- return closest attempt
+    let closest = frontier[0], closestD = Infinity;
+    for (const pt of frontier) {
+      const d = haversineNm([pt.lat, pt.lon], end);
+      if (d < closestD) { closestD = d; closest = pt; }
+    }
+    return { path: closest.path, etaMs: closest.timeMs, converged: false };
+  }
+
+  function pathToLegs(path) {
+    const legs = [];
+    for (let i = 0; i < path.length - 1; i++) {
+      const a = path[i], b = path[i+1];
+      legs.push({
+        start: [a.lat, a.lon], end: [b.lat, b.lon],
+        distanceNm: haversineNm([a.lat, a.lon], [b.lat, b.lon]),
+        startTimeMs: a.timeMs, endTimeMs: b.timeMs,
+        avgBoatSpeedKts: b.boatSpeedKts, avgSogKts: b.sogKts,
+        avgTwsKts: b.twsKts, avgTwaDeg: Math.abs(b.twaDeg),
+        avgWaveHeightM: b.waveHeightM, avgCurrentKts: b.currentKts,
+      });
+    }
+    return legs;
+  }
+
+  // ---------------------------------------------------------------------
   // UI wiring
   // ---------------------------------------------------------------------
   const dropzone = document.getElementById('dropzone');
@@ -755,6 +1035,8 @@
   const routeHint = document.getElementById('routeHint');
   const departureInput = document.getElementById('departureInput');
   const boatSelect = document.getElementById('boatSelect');
+  const modeSelect = document.getElementById('modeSelect');
+  const modeHint = document.getElementById('modeHint');
   const boatHint = document.getElementById('boatHint');
   const calcButton = document.getElementById('calcButton');
   const statusBox = document.getElementById('statusBox');
@@ -763,6 +1045,14 @@
   const resultsBox = document.getElementById('results');
   const errorBox = document.getElementById('errorBox');
   const errorText = document.getElementById('errorText');
+  const tabGpx = document.getElementById('tabGpx');
+  const tabMap = document.getElementById('tabMap');
+  const gpxSection = document.getElementById('gpxSection');
+  const mapSection = document.getElementById('mapSection');
+  const mapPointCount = document.getElementById('mapPointCount');
+  const mapUndoBtn = document.getElementById('mapUndoBtn');
+  const mapClearBtn = document.getElementById('mapClearBtn');
+  const mapUseBtn = document.getElementById('mapUseBtn');
 
   let currentRoute = null;
 
@@ -827,6 +1117,107 @@
     reader.readAsText(file);
   }
 
+  // ---------------------------------------------------------------------
+  // Map point-picking (alternative to GPX upload)
+  // ---------------------------------------------------------------------
+  let leafletMap = null;
+  let tappedPoints = [];
+  let tappedMarkers = [];
+  let tappedLine = null;
+  const DEFAULT_MAP_CENTER = [55.68, 12.60]; // fallback if geolocation unavailable
+
+  function initMap() {
+    if (leafletMap) return;
+    if (typeof L === 'undefined') {
+      mapPointCount.textContent = "Map failed to load -- check your connection, or use GPX upload instead.";
+      return;
+    }
+    leafletMap = L.map('mapContainer', { zoomControl: true }).setView(DEFAULT_MAP_CENTER, 10);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      maxZoom: 18,
+    }).addTo(leafletMap);
+
+    leafletMap.on('click', e => addTappedPoint(e.latlng.lat, e.latlng.lng));
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        pos => leafletMap.setView([pos.coords.latitude, pos.coords.longitude], 11),
+        () => {}, // silently keep default center if denied/unavailable
+        { timeout: 4000 }
+      );
+    }
+  }
+
+  function redrawTapped() {
+    tappedMarkers.forEach(m => leafletMap.removeLayer(m));
+    tappedMarkers = [];
+    if (tappedLine) { leafletMap.removeLayer(tappedLine); tappedLine = null; }
+
+    tappedPoints.forEach((p, i) => {
+      const isEndpoint = i === 0 || i === tappedPoints.length - 1;
+      const marker = L.circleMarker(p, {
+        radius: isEndpoint ? 7 : 5,
+        color: '#C89B3C',
+        fillColor: i === 0 ? '#6FBF8B' : (isEndpoint ? '#C1553B' : '#C89B3C'),
+        fillOpacity: 0.9,
+        weight: 2,
+      }).addTo(leafletMap);
+      tappedMarkers.push(marker);
+    });
+    if (tappedPoints.length > 1) {
+      tappedLine = L.polyline(tappedPoints, { color: '#C89B3C', weight: 2, opacity: 0.7, dashArray: '4,4' }).addTo(leafletMap);
+    }
+
+    mapPointCount.innerHTML = tappedPoints.length === 0
+      ? "Tap the map to place a point"
+      : `<strong>${tappedPoints.length}</strong> point${tappedPoints.length > 1 ? 's' : ''} placed`;
+    mapUndoBtn.disabled = tappedPoints.length === 0;
+    mapClearBtn.disabled = tappedPoints.length === 0;
+    mapUseBtn.disabled = tappedPoints.length < 2;
+  }
+
+  function addTappedPoint(lat, lon) {
+    tappedPoints.push([lat, lon]);
+    redrawTapped();
+  }
+
+  tabGpx.addEventListener('click', () => {
+    tabGpx.classList.add('active');
+    tabMap.classList.remove('active');
+    gpxSection.classList.remove('active');
+    gpxSection.style.display = '';
+    mapSection.classList.remove('active');
+  });
+
+  tabMap.addEventListener('click', () => {
+    tabMap.classList.add('active');
+    tabGpx.classList.remove('active');
+    gpxSection.style.display = 'none';
+    mapSection.classList.add('active');
+    initMap();
+    setTimeout(() => { if (leafletMap) leafletMap.invalidateSize(); }, 50);
+  });
+
+  mapUndoBtn.addEventListener('click', () => {
+    tappedPoints.pop();
+    redrawTapped();
+  });
+
+  mapClearBtn.addEventListener('click', () => {
+    tappedPoints = [];
+    redrawTapped();
+  });
+
+  mapUseBtn.addEventListener('click', () => {
+    if (tappedPoints.length < 2) return;
+    clearError();
+    currentRoute = tappedPoints.map(p => [p[0], p[1]]);
+    const totalNm = currentRoute.slice(0,-1).reduce((sum, p, i) => sum + haversineNm(p, currentRoute[i+1]), 0);
+    routeHint.textContent = `${currentRoute.length} points from map, ${totalNm.toFixed(1)} nm total`;
+    checkReady();
+  });
+
   departureInput.addEventListener('change', checkReady);
 
   const BOAT_HINTS = {
@@ -835,6 +1226,14 @@
   };
   boatSelect.addEventListener('change', () => {
     boatHint.textContent = BOAT_HINTS[boatSelect.value] || "";
+  });
+
+  const MODE_HINTS = {
+    fixed: "Uses the route's waypoints as sailed, straight between them.",
+    fastest: "Searches for the quickest path between the route's first and last point, tacking through the wind where needed. Ignores intermediate waypoints.",
+  };
+  modeSelect.addEventListener('change', () => {
+    modeHint.textContent = MODE_HINTS[modeSelect.value] || "";
   });
 
   function fmtDuration(hours) {
@@ -862,7 +1261,7 @@
     </g></svg>`;
   }
 
-  function renderResults(route, legs, etaMs, startMs, noGoDeg) {
+  function renderResults(route, legs, etaMs, startMs, noGoDeg, routeMode, directNm) {
     const totalNm = legs.reduce((s,l) => s + l.distanceNm, 0);
     const totalHours = (etaMs - startMs) / 3600000;
 
@@ -872,14 +1271,26 @@
     document.getElementById('statDuration').textContent = fmtDuration(totalHours);
     document.getElementById('statDeparture').textContent = fmtTime(startMs);
 
-    const nogoLegs = legs.filter(l => l.avgTwaDeg < noGoDeg);
     const warnBanner = document.getElementById('warnBanner');
-    if (nogoLegs.length > 0) {
-      const nogoNm = nogoLegs.reduce((s,l) => s + l.distanceNm, 0);
+    if (routeMode === 'fastest') {
       warnBanner.style.display = 'block';
-      warnBanner.innerHTML = `<strong>${nogoLegs.length} leg${nogoLegs.length>1?'s':''}</strong> (${nogoNm.toFixed(1)} nm) point too close to the wind to sail directly &mdash; you'd need to tack through these sections. The ETA below doesn't account for that extra distance, so treat it as optimistic for those stretches.`;
+      warnBanner.classList.remove('warn-banner');
+      warnBanner.style.borderLeftColor = 'var(--accent-brass)';
+      warnBanner.style.background = 'rgba(200, 155, 60, 0.08)';
+      const extraNm = totalNm - directNm;
+      const tackCount = legs.length - 1;
+      warnBanner.innerHTML = `Sailed distance is <strong>${totalNm.toFixed(1)} nm</strong> vs <strong>${directNm.toFixed(1)} nm</strong> direct (${extraNm > 0.1 ? '+' + extraNm.toFixed(1) + ' nm from tacking' : 'straight shot, no tacking needed'})${tackCount > 0 ? `, across ${tackCount} heading change${tackCount>1?'s':''}` : ''}.`;
     } else {
-      warnBanner.style.display = 'none';
+      const nogoLegs = legs.filter(l => l.avgTwaDeg < noGoDeg);
+      if (nogoLegs.length > 0) {
+        const nogoNm = nogoLegs.reduce((s,l) => s + l.distanceNm, 0);
+        warnBanner.style.display = 'block';
+        warnBanner.style.borderLeftColor = '';
+        warnBanner.style.background = '';
+        warnBanner.innerHTML = `<strong>${nogoLegs.length} leg${nogoLegs.length>1?'s':''}</strong> (${nogoNm.toFixed(1)} nm) point too close to the wind to sail directly &mdash; you'd need to tack through these sections. The ETA below doesn't account for that extra distance, so treat it as optimistic for those stretches. Try "Find fastest route" mode for a tacking-aware estimate.`;
+      } else {
+        warnBanner.style.display = 'none';
+      }
     }
 
     const legsList = document.getElementById('legsList');
@@ -917,18 +1328,39 @@
       const startTimeMs = new Date(departureInput.value).getTime();
       if (isNaN(startTimeMs)) throw new Error("Pick a valid departure date and time.");
 
-      const samplePoints = buildSamplePoints(currentRoute);
+      const polarTable = POLARS[boatSelect.value].table;
+      const noGoDeg = POLARS[boatSelect.value].noGoDeg;
+      const mode = modeSelect.value;
 
-      statusText.textContent = "Reading wind over water…";
-      await prefetchAll(samplePoints, (done, total) => {
-        statusProgress.textContent = `${done} / ${total} points`;
-      });
-
-      statusText.textContent = "Working out boat speed…";
-      await new Promise(r => setTimeout(r, 50)); // let UI paint
-
-      const { legs, etaMs } = simulateRoute(currentRoute, startTimeMs, POLARS[boatSelect.value].table);
-      renderResults(currentRoute, legs, etaMs, startTimeMs, POLARS[boatSelect.value].noGoDeg);
+      if (mode === 'fixed') {
+        const samplePoints = buildSamplePoints(currentRoute);
+        statusText.textContent = "Reading wind over water…";
+        await prefetchAll(samplePoints, (done, total) => {
+          statusProgress.textContent = `${done} / ${total} points`;
+        });
+        statusText.textContent = "Working out boat speed…";
+        await new Promise(r => setTimeout(r, 50));
+        const { legs, etaMs } = simulateRoute(currentRoute, startTimeMs, polarTable);
+        renderResults(currentRoute, legs, etaMs, startTimeMs, noGoDeg, 'fixed', null);
+      } else {
+        const start = currentRoute[0], end = currentRoute[currentRoute.length - 1];
+        const grid = buildGrid(start, end, 10);
+        statusText.textContent = "Mapping wind over the search area…";
+        await prefetchAll(grid, (done, total) => {
+          statusProgress.textContent = `${done} / ${total} points`;
+        });
+        statusText.textContent = "Searching for the fastest course…";
+        await new Promise(r => setTimeout(r, 50));
+        const result = computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, (iter, max) => {
+          statusProgress.textContent = `step ${iter + 1} / ${max}`;
+        });
+        if (!result.converged) {
+          showError("Couldn't find a route that reaches the destination within the search limits -- the wind may make this leg impractical right now, or the start/end points are too far apart for this quick search. Showing the closest attempt below.");
+        }
+        const legs = pathToLegs(result.path);
+        const directNm = haversineNm(start, end);
+        renderResults(currentRoute, legs, result.etaMs, startTimeMs, noGoDeg, 'fastest', directNm);
+      }
     } catch (err) {
       showError(err.message || "Something went wrong fetching weather data. Check your connection and try again.");
     } finally {
