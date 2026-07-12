@@ -746,6 +746,106 @@
   }
 
   // ---------------------------------------------------------------------
+  // Land avoidance: coastline data (Natural Earth, 1:50m resolution, free,
+  // CORS-enabled) loaded once and used to reject any route segment that
+  // crosses land. Resolution is coastal-scale (checked against real
+  // narrow-strait waypoints), not survey-grade -- treat as a planning aid,
+  // not a substitute for a chart.
+  // ---------------------------------------------------------------------
+  const LAND_DATA_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_land.geojson";
+  let landFeaturesCache = null;
+  let landLoadPromise = null;
+
+  function computeBBox(polys) {
+    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+    polys.forEach(rings => rings.forEach(ring => ring.forEach(([lon, lat]) => {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    })));
+    return [minLon, minLat, maxLon, maxLat];
+  }
+
+  async function loadLandData() {
+    if (landFeaturesCache) return landFeaturesCache;
+    if (landLoadPromise) return landLoadPromise;
+    landLoadPromise = (async () => {
+      const resp = await fetch(LAND_DATA_URL);
+      if (!resp.ok) throw new Error(`Coastline data fetch failed (${resp.status})`);
+      const geojson = await resp.json();
+      landFeaturesCache = geojson.features.map(f => {
+        const geom = f.geometry;
+        const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+        return { polys, bbox: computeBBox(polys) };
+      });
+      return landFeaturesCache;
+    })();
+    return landLoadPromise;
+  }
+
+  function filterLandForBounds(features, bounds, marginDeg) {
+    const [minLon, minLat, maxLon, maxLat] = bounds;
+    return features.filter(f => {
+      const [fMinLon, fMinLat, fMaxLon, fMaxLat] = f.bbox;
+      return !(fMaxLon < minLon - marginDeg || fMinLon > maxLon + marginDeg ||
+               fMaxLat < minLat - marginDeg || fMinLat > maxLat + marginDeg);
+    });
+  }
+
+  function pointInRing(lon, lat, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      const intersect = ((yi > lat) !== (yj > lat)) &&
+        (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointInPolygonWithHoles(lon, lat, rings) {
+    if (!pointInRing(lon, lat, rings[0])) return false;
+    for (let k = 1; k < rings.length; k++) {
+      if (pointInRing(lon, lat, rings[k])) return false;
+    }
+    return true;
+  }
+
+  function isPointOnLand(lat, lon, relevantFeatures) {
+    for (const feat of relevantFeatures) {
+      const [minLon, minLat, maxLon, maxLat] = feat.bbox;
+      if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) continue;
+      for (const rings of feat.polys) {
+        if (pointInPolygonWithHoles(lon, lat, rings)) return true;
+      }
+    }
+    return false;
+  }
+
+  function segmentCrossesLand(p1, p2, relevantFeatures, samples) {
+    samples = samples || 12;
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const lat = p1[0] + (p2[0] - p1[0]) * t;
+      const lon = p1[1] + (p2[1] - p1[1]) * t;
+      if (isPointOnLand(lat, lon, relevantFeatures)) return true;
+    }
+    return false;
+  }
+
+  function boundsFromPoints(points, marginDeg) {
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    points.forEach(([lat, lon]) => {
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+    });
+    return [minLon - marginDeg, minLat - marginDeg, maxLon + marginDeg, maxLat + marginDeg];
+  }
+
+  // ---------------------------------------------------------------------
   // Route simulation
   // ---------------------------------------------------------------------
   const STEP_NM = 3.0;
@@ -875,29 +975,36 @@
     const latMin = Math.min(...lats) - latMarginDeg, latMax = Math.max(...lats) + latMarginDeg;
     const lonMin = Math.min(...lons) - lonMarginDeg, lonMax = Math.max(...lons) + lonMarginDeg;
 
-    const grid = [];
+    const points = [];
     for (let i = 0; i < gridN; i++) {
       for (let j = 0; j < gridN; j++) {
         const lat = latMin + (latMax - latMin) * (i / (gridN - 1));
         const lon = lonMin + (lonMax - lonMin) * (j / (gridN - 1));
-        grid.push([lat, lon]);
+        points.push([lat, lon]);
       }
     }
-    return grid;
+    return { points, latMin, latMax, lonMin, lonMax, gridN };
   }
 
-  function nearestGridSeries(grid, lat, lon) {
-    let best = null, bestD = Infinity;
-    for (const [glat, glon] of grid) {
-      const d = (glat - lat) ** 2 + (glon - lon) ** 2;
-      if (d < bestD) { bestD = d; best = [glat, glon]; }
-    }
-    const key = cacheKey(best[0], best[1]);
+  // O(1) nearest-cell lookup, since the grid is regular -- no scanning needed.
+  function gridCellIndex(gridMeta, lat, lon) {
+    const { latMin, latMax, lonMin, lonMax, gridN } = gridMeta;
+    let i = Math.round((lat - latMin) / (latMax - latMin) * (gridN - 1));
+    let j = Math.round((lon - lonMin) / (lonMax - lonMin) * (gridN - 1));
+    i = Math.max(0, Math.min(gridN - 1, i));
+    j = Math.max(0, Math.min(gridN - 1, j));
+    return i * gridN + j;
+  }
+
+  function nearestGridSeries(gridMeta, lat, lon) {
+    const idx = gridCellIndex(gridMeta, lat, lon);
+    const [glat, glon] = gridMeta.points[idx];
+    const key = cacheKey(glat, glon);
     return { wind: windCache.get(key), marine: marineCache.get(key) };
   }
 
-  function sampleAt(grid, lat, lon, timeMs) {
-    const { wind, marine } = nearestGridSeries(grid, lat, lon);
+  function sampleAt(gridMeta, lat, lon, timeMs) {
+    const { wind, marine } = nearestGridSeries(gridMeta, lat, lon);
     const wIdx = nearestIndex(wind.times, timeMs);
     const twsKts = wind.speed[wIdx];
     const windDirDeg = wind.dir[wIdx];
@@ -913,7 +1020,66 @@
     return { twsKts, windDirDeg, waveHeightM, waveDirDeg, currentSpeedKts, currentDirDeg };
   }
 
-  function computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, onProgress) {
+  // ---------------------------------------------------------------------
+  // Land avoidance: uses Open-Meteo's free Elevation API (no key needed)
+  // to build a land/water mask over the search area. Points at or above
+  // LAND_ELEVATION_THRESHOLD_M are treated as land and the router will
+  // refuse to cross them. This is a coarse approximation (90m-resolution
+  // terrain data, sampled on our own grid) -- it won't reliably resolve
+  // very narrow channels, thin spits, or harbor breakwaters, so always
+  // sanity-check a suggested route before actually sailing it.
+  // ---------------------------------------------------------------------
+  const LAND_ELEVATION_THRESHOLD_M = 1.0;
+
+  async function fetchElevationGrid(gridMeta, onProgress) {
+    const points = gridMeta.points;
+    const isLand = new Array(points.length).fill(false);
+    const chunkSize = 100; // Open-Meteo elevation API accepts up to 100 coordinate pairs per request
+    let done = 0;
+    for (let start = 0; start < points.length; start += chunkSize) {
+      const chunk = points.slice(start, start + chunkSize);
+      const latStr = chunk.map(p => p[0]).join(',');
+      const lonStr = chunk.map(p => p[1]).join(',');
+      const url = `https://api.open-meteo.com/v1/elevation?latitude=${latStr}&longitude=${lonStr}`;
+      try {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.elevation) {
+            json.elevation.forEach((elev, k) => {
+              isLand[start + k] = elev != null && elev >= LAND_ELEVATION_THRESHOLD_M;
+            });
+          }
+        }
+      } catch (e) {
+        // if elevation lookup fails, default to "not land" for this chunk --
+        // better to risk an unblocked route than to falsely block the whole area
+      }
+      done += chunk.length;
+      onProgress(done, points.length);
+    }
+    return isLand;
+  }
+
+  function isLandAt(gridMeta, landFlags, lat, lon) {
+    return landFlags[gridCellIndex(gridMeta, lat, lon)];
+  }
+
+  // Samples several points along a segment and returns true if any of them
+  // land on land -- catches a candidate hop that would otherwise "jump over"
+  // a headland or narrow strip between its two endpoints.
+  function segmentCrossesLand(gridMeta, landFlags, p1, p2, samples) {
+    samples = samples || 6;
+    for (let s = 0; s <= samples; s++) {
+      const t = s / samples;
+      const lat = p1[0] + (p2[0] - p1[0]) * t;
+      const lon = p1[1] + (p2[1] - p1[1]) * t;
+      if (isLandAt(gridMeta, landFlags, lat, lon)) return true;
+    }
+    return false;
+  }
+
+  function computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, landGridMeta, landFlags, onProgress) {
     const directNm = haversineNm(start, end);
     const refBearing = bearingDeg(start, end);
     const timeStepHours = directNm > 30 ? 1.0 : (directNm > 10 ? 0.5 : 0.25);
@@ -950,6 +1116,7 @@
         if (vmg <= 0.3) continue;
         const hoursNeeded = remainingNm / vmg;
         if (hoursNeeded > timeStepHours * 1.5) continue; // too far to finish this step, keep spreading instead
+        if (segmentCrossesLand(landGridMeta, landFlags, [pt.lat, pt.lon], end)) continue; // would cross land
         const finishTimeMs = pt.timeMs + hoursNeeded * 3600 * 1000;
         if (!bestFinish || finishTimeMs < bestFinish.timeMs) {
           bestFinish = {
@@ -980,6 +1147,7 @@
           const distNm = vmg * timeStepHours;
           if (distNm <= 0) continue;
           const [newLat, newLon] = destinationPoint([pt.lat, pt.lon], heading, distNm);
+          if (segmentCrossesLand(landGridMeta, landFlags, [pt.lat, pt.lon], [newLat, newLon])) continue; // would cross land
           const newTimeMs = pt.timeMs + timeStepHours * 3600 * 1000;
           const bearingFromStart = bearingDeg(start, [newLat, newLon]);
           const distFromStart = haversineNm(start, [newLat, newLon]);
@@ -1410,17 +1578,31 @@
       } else {
         const start = currentRoute[0], end = currentRoute[currentRoute.length - 1];
         const grid = buildGrid(start, end, 10);
+        const landGridMeta = buildGrid(start, end, 20);
+
+        statusText.textContent = "Checking for land…";
+        const landFlags = await fetchElevationGrid(landGridMeta, (done, total) => {
+          statusProgress.textContent = `${done} / ${total} points`;
+        });
+
+        if (isLandAt(landGridMeta, landFlags, start[0], start[1])) {
+          throw new Error("The start point looks like it's on land, not water -- double check where you tapped or the first point in your GPX.");
+        }
+        if (isLandAt(landGridMeta, landFlags, end[0], end[1])) {
+          throw new Error("The end point looks like it's on land, not water -- double check where you tapped or the last point in your GPX.");
+        }
+
         statusText.textContent = "Mapping wind over the search area…";
-        await prefetchAll(grid, (done, total) => {
+        await prefetchAll(grid.points, (done, total) => {
           statusProgress.textContent = `${done} / ${total} points`;
         });
         statusText.textContent = "Searching for the fastest course…";
         await new Promise(r => setTimeout(r, 50));
-        const result = computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, (iter, max) => {
+        const result = computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, landGridMeta, landFlags, (iter, max) => {
           statusProgress.textContent = `step ${iter + 1} / ${max}`;
         });
         if (!result.converged) {
-          showError("Couldn't find a route that reaches the destination within the search limits -- the wind may make this leg impractical right now, or the start/end points are too far apart for this quick search. Showing the closest attempt below.");
+          showError("Couldn't find a route that reaches the destination within the search limits -- the wind or coastline may make this leg impractical for this quick search, or the start/end points are too far apart. Showing the closest attempt below.");
         }
         const legs = pathToLegs(result.path);
         const directNm = haversineNm(start, end);
