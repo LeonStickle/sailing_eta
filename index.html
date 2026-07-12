@@ -746,106 +746,6 @@
   }
 
   // ---------------------------------------------------------------------
-  // Land avoidance: coastline data (Natural Earth, 1:50m resolution, free,
-  // CORS-enabled) loaded once and used to reject any route segment that
-  // crosses land. Resolution is coastal-scale (checked against real
-  // narrow-strait waypoints), not survey-grade -- treat as a planning aid,
-  // not a substitute for a chart.
-  // ---------------------------------------------------------------------
-  const LAND_DATA_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_land.geojson";
-  let landFeaturesCache = null;
-  let landLoadPromise = null;
-
-  function computeBBox(polys) {
-    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
-    polys.forEach(rings => rings.forEach(ring => ring.forEach(([lon, lat]) => {
-      if (lon < minLon) minLon = lon;
-      if (lon > maxLon) maxLon = lon;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    })));
-    return [minLon, minLat, maxLon, maxLat];
-  }
-
-  async function loadLandData() {
-    if (landFeaturesCache) return landFeaturesCache;
-    if (landLoadPromise) return landLoadPromise;
-    landLoadPromise = (async () => {
-      const resp = await fetch(LAND_DATA_URL);
-      if (!resp.ok) throw new Error(`Coastline data fetch failed (${resp.status})`);
-      const geojson = await resp.json();
-      landFeaturesCache = geojson.features.map(f => {
-        const geom = f.geometry;
-        const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
-        return { polys, bbox: computeBBox(polys) };
-      });
-      return landFeaturesCache;
-    })();
-    return landLoadPromise;
-  }
-
-  function filterLandForBounds(features, bounds, marginDeg) {
-    const [minLon, minLat, maxLon, maxLat] = bounds;
-    return features.filter(f => {
-      const [fMinLon, fMinLat, fMaxLon, fMaxLat] = f.bbox;
-      return !(fMaxLon < minLon - marginDeg || fMinLon > maxLon + marginDeg ||
-               fMaxLat < minLat - marginDeg || fMinLat > maxLat + marginDeg);
-    });
-  }
-
-  function pointInRing(lon, lat, ring) {
-    let inside = false;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
-      const intersect = ((yi > lat) !== (yj > lat)) &&
-        (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-      if (intersect) inside = !inside;
-    }
-    return inside;
-  }
-
-  function pointInPolygonWithHoles(lon, lat, rings) {
-    if (!pointInRing(lon, lat, rings[0])) return false;
-    for (let k = 1; k < rings.length; k++) {
-      if (pointInRing(lon, lat, rings[k])) return false;
-    }
-    return true;
-  }
-
-  function isPointOnLand(lat, lon, relevantFeatures) {
-    for (const feat of relevantFeatures) {
-      const [minLon, minLat, maxLon, maxLat] = feat.bbox;
-      if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) continue;
-      for (const rings of feat.polys) {
-        if (pointInPolygonWithHoles(lon, lat, rings)) return true;
-      }
-    }
-    return false;
-  }
-
-  function segmentCrossesLand(p1, p2, relevantFeatures, samples) {
-    samples = samples || 12;
-    for (let i = 0; i <= samples; i++) {
-      const t = i / samples;
-      const lat = p1[0] + (p2[0] - p1[0]) * t;
-      const lon = p1[1] + (p2[1] - p1[1]) * t;
-      if (isPointOnLand(lat, lon, relevantFeatures)) return true;
-    }
-    return false;
-  }
-
-  function boundsFromPoints(points, marginDeg) {
-    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-    points.forEach(([lat, lon]) => {
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-      if (lon < minLon) minLon = lon;
-      if (lon > maxLon) maxLon = lon;
-    });
-    return [minLon - marginDeg, minLat - marginDeg, maxLon + marginDeg, maxLat + marginDeg];
-  }
-
-  // ---------------------------------------------------------------------
   // Route simulation
   // ---------------------------------------------------------------------
   const STEP_NM = 3.0;
@@ -1021,43 +921,89 @@
   }
 
   // ---------------------------------------------------------------------
-  // Land avoidance: uses Open-Meteo's free Elevation API (no key needed)
-  // to build a land/water mask over the search area. Points at or above
-  // LAND_ELEVATION_THRESHOLD_M are treated as land and the router will
-  // refuse to cross them. This is a coarse approximation (90m-resolution
-  // terrain data, sampled on our own grid) -- it won't reliably resolve
-  // very narrow channels, thin spits, or harbor breakwaters, so always
+  // Land avoidance: uses OpenStreetMap's Overpass API to fetch real
+  // coastline geometry (the same underlying database OpenSeaMap itself is
+  // built on -- OpenSeaMap doesn't expose a coordinate-query API, only map
+  // tiles, so this queries the source data directly instead). Each grid
+  // point is classified land/water by finding the nearest coastline
+  // segment(s) and checking which side it falls on, using OSM's mapping
+  // convention: land is always on the LEFT of a coastline way, water on
+  // the RIGHT (in the direction the way is drawn).
+  //
+  // This is still an approximation -- it won't perfectly resolve very
+  // narrow channels or harbor breakwaters at typical grid resolution, and
+  // it only reflects whatever's mapped in OSM for the area. Always
   // sanity-check a suggested route before actually sailing it.
   // ---------------------------------------------------------------------
-  const LAND_ELEVATION_THRESHOLD_M = 1.0;
+  const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 
-  async function fetchElevationGrid(gridMeta, onProgress) {
-    const points = gridMeta.points;
-    const isLand = new Array(points.length).fill(false);
-    const chunkSize = 100; // Open-Meteo elevation API accepts up to 100 coordinate pairs per request
-    let done = 0;
-    for (let start = 0; start < points.length; start += chunkSize) {
-      const chunk = points.slice(start, start + chunkSize);
-      const latStr = chunk.map(p => p[0]).join(',');
-      const lonStr = chunk.map(p => p[1]).join(',');
-      const url = `https://api.open-meteo.com/v1/elevation?latitude=${latStr}&longitude=${lonStr}`;
-      try {
-        const resp = await fetch(url);
-        if (resp.ok) {
-          const json = await resp.json();
-          if (json.elevation) {
-            json.elevation.forEach((elev, k) => {
-              isLand[start + k] = elev != null && elev >= LAND_ELEVATION_THRESHOLD_M;
-            });
-          }
+  async function fetchCoastlineSegments(gridMeta) {
+    const { latMin, latMax, lonMin, lonMax } = gridMeta;
+    const padLat = (latMax - latMin) * 0.15;
+    const padLon = (lonMax - lonMin) * 0.15;
+    const bbox = `${latMin - padLat},${lonMin - padLon},${latMax + padLat},${lonMax + padLon}`;
+    const query = `[out:json][timeout:25];way["natural"="coastline"](${bbox});out geom;`;
+    const resp = await fetch(OVERPASS_URL, {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(query),
+    });
+    if (!resp.ok) throw new Error(`Coastline lookup failed (${resp.status}) -- Overpass may be busy, try again shortly.`);
+    const json = await resp.json();
+    const segments = [];
+    for (const el of (json.elements || [])) {
+      if (el.type === 'way' && el.geometry && el.geometry.length > 1) {
+        for (let i = 0; i < el.geometry.length - 1; i++) {
+          const a = el.geometry[i], b = el.geometry[i + 1];
+          segments.push([[a.lat, a.lon], [b.lat, b.lon]]);
         }
-      } catch (e) {
-        // if elevation lookup fails, default to "not land" for this chunk --
-        // better to risk an unblocked route than to falsely block the whole area
       }
-      done += chunk.length;
-      onProgress(done, points.length);
     }
+    return segments;
+  }
+
+  // Cross product of (segB-segA) x (q-segA), using lon as x and lat as y.
+  // Positive = q is left of the way's direction (LAND). Negative = right (WATER).
+  function sideOfSegment(segA, segB, q) {
+    return (segB[1] - segA[1]) * (q[0] - segA[0]) - (segB[0] - segA[0]) * (q[1] - segA[1]);
+  }
+
+  function pointToSegmentDistSq(a, b, q) {
+    const dx = b[1] - a[1], dy = b[0] - a[0];
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return (q[0] - a[0]) ** 2 + (q[1] - a[1]) ** 2;
+    let t = ((q[1] - a[1]) * dx + (q[0] - a[0]) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const projLat = a[0] + t * dy, projLon = a[1] + t * dx;
+    return (q[0] - projLat) ** 2 + (q[1] - projLon) ** 2;
+  }
+
+  // No coastline segments nearby -> nothing mapped in view -> assume water.
+  // For a sailing app the search area is inherently near marine waypoints,
+  // so "no coastline in view" almost always means open water, not a gap in
+  // the data over land. Uses only the single nearest segment -- averaging
+  // votes across several nearest segments sounds more robust but actually
+  // misfires when segments are sparse (e.g. a small island), since distant
+  // sides of the same shape get pulled in and no longer reflect the local
+  // geometry near the query point.
+  const MAX_COASTLINE_DIST_DEG_SQ = 0.09; // ~0.3 deg (~18nm) -- beyond this, treat as open water
+
+  function classifyPointAgainstCoastline(segments, lat, lon) {
+    if (segments.length === 0) return false;
+    let bestSeg = null, bestD = Infinity;
+    for (const seg of segments) {
+      const d = pointToSegmentDistSq(seg[0], seg[1], [lat, lon]);
+      if (d < bestD) { bestD = d; bestSeg = seg; }
+    }
+    if (bestD > MAX_COASTLINE_DIST_DEG_SQ) return false;
+    return sideOfSegment(bestSeg[0], bestSeg[1], [lat, lon]) > 0;
+  }
+
+  async function fetchCoastlineLandGrid(gridMeta, onProgress) {
+    onProgress(0, 1);
+    const segments = await fetchCoastlineSegments(gridMeta);
+    onProgress(1, 2);
+    const isLand = gridMeta.points.map(([lat, lon]) => classifyPointAgainstCoastline(segments, lat, lon));
+    onProgress(2, 2);
     return isLand;
   }
 
@@ -1069,7 +1015,7 @@
   // land on land -- catches a candidate hop that would otherwise "jump over"
   // a headland or narrow strip between its two endpoints.
   function segmentCrossesLand(gridMeta, landFlags, p1, p2, samples) {
-    samples = samples || 6;
+    samples = samples || 20;
     for (let s = 0; s <= samples; s++) {
       const t = s / samples;
       const lat = p1[0] + (p2[0] - p1[0]) * t;
@@ -1315,6 +1261,10 @@
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
       maxZoom: 18,
     }).addTo(leafletMap);
+    L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
+      attribution: 'Seamarks &copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> contributors',
+      maxZoom: 18,
+    }).addTo(leafletMap);
 
     leafletMap.on('click', e => addTappedPoint(e.latlng.lat, e.latlng.lng));
 
@@ -1517,6 +1467,10 @@
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
           maxZoom: 18,
         }).addTo(resultsMap);
+        L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
+          attribution: 'Seamarks &copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> contributors',
+          maxZoom: 18,
+        }).addTo(resultsMap);
       } else {
         const toRemove = [];
         resultsMap.eachLayer(layer => { if (!(layer instanceof L.TileLayer)) toRemove.push(layer); });
@@ -1580,8 +1534,8 @@
         const grid = buildGrid(start, end, 10);
         const landGridMeta = buildGrid(start, end, 20);
 
-        statusText.textContent = "Checking for land…";
-        const landFlags = await fetchElevationGrid(landGridMeta, (done, total) => {
+        statusText.textContent = "Checking coastline data…";
+        const landFlags = await fetchCoastlineLandGrid(landGridMeta, (done, total) => {
           statusProgress.textContent = `${done} / ${total} points`;
         });
 
