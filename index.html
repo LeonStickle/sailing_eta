@@ -1332,41 +1332,52 @@
   let resultsMap = null;
 
   function renderRouteOnMap(legs, noGoDeg) {
-    if (typeof L === 'undefined') return; // Leaflet failed to load -- skip silently, rest of results still work
-
-    if (!resultsMap) {
-      resultsMap = L.map('resultsMapContainer', { zoomControl: true, attributionControl: true });
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        maxZoom: 18,
-      }).addTo(resultsMap);
-    } else {
-      resultsMap.eachLayer(layer => {
-        if (!(layer instanceof L.TileLayer)) resultsMap.removeLayer(layer);
-      });
+    const container = document.getElementById('resultsMapContainer');
+    if (typeof L === 'undefined') {
+      container.innerHTML = '<div style="padding:16px;font-family:\'IBM Plex Mono\',monospace;font-size:12px;color:var(--text-muted);text-align:center;">Map library didn\'t load \u2014 check your connection and reload.</div>';
+      return;
     }
 
-    const points = [legs[0].start, ...legs.map(l => l.end)];
+    try {
+      const points = [legs[0].start, ...legs.map(l => l.end)];
+      const bounds = L.latLngBounds(points);
 
-    legs.forEach(leg => {
-      const nogo = leg.avgTwaDeg < noGoDeg;
-      L.polyline([leg.start, leg.end], {
-        color: nogo ? '#C1553B' : '#C89B3C',
-        weight: 3,
-        opacity: 0.85,
-      }).addTo(resultsMap);
-    });
+      if (!resultsMap) {
+        resultsMap = L.map('resultsMapContainer', { zoomControl: true, attributionControl: true });
+        resultsMap.fitBounds(bounds, { padding: [24, 24] }); // establishes an initial view before any layers are added
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+          maxZoom: 18,
+        }).addTo(resultsMap);
+      } else {
+        const toRemove = [];
+        resultsMap.eachLayer(layer => { if (!(layer instanceof L.TileLayer)) toRemove.push(layer); });
+        toRemove.forEach(layer => resultsMap.removeLayer(layer));
+      }
 
-    L.circleMarker(points[0], { radius: 7, color: '#6FBF8B', fillColor: '#6FBF8B', fillOpacity: 0.9, weight: 2 })
-      .addTo(resultsMap).bindTooltip('Start', { permanent: false });
-    L.circleMarker(points[points.length - 1], { radius: 7, color: '#C1553B', fillColor: '#C1553B', fillOpacity: 0.9, weight: 2 })
-      .addTo(resultsMap).bindTooltip('Finish', { permanent: false });
+      legs.forEach(leg => {
+        const nogo = leg.avgTwaDeg < noGoDeg;
+        L.polyline([leg.start, leg.end], {
+          color: nogo ? '#C1553B' : '#C89B3C',
+          weight: 3,
+          opacity: 0.85,
+        }).addTo(resultsMap);
+      });
 
-    const bounds = L.latLngBounds(points);
-    setTimeout(() => {
+      L.circleMarker(points[0], { radius: 7, color: '#6FBF8B', fillColor: '#6FBF8B', fillOpacity: 0.9, weight: 2 })
+        .addTo(resultsMap).bindTooltip('Start', { permanent: false });
+      L.circleMarker(points[points.length - 1], { radius: 7, color: '#C1553B', fillColor: '#C1553B', fillOpacity: 0.9, weight: 2 })
+        .addTo(resultsMap).bindTooltip('Finish', { permanent: false });
+
       resultsMap.invalidateSize();
       resultsMap.fitBounds(bounds, { padding: [24, 24] });
-    }, 50);
+      setTimeout(() => {
+        resultsMap.invalidateSize();
+        resultsMap.fitBounds(bounds, { padding: [24, 24] });
+      }, 150);
+    } catch (err) {
+      container.innerHTML = `<div style="padding:16px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--signal-warn);text-align:center;">Map error: ${err.message}</div>`;
+    }
   }
 
   calcButton.addEventListener('click', async () => {
