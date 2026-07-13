@@ -1532,7 +1532,12 @@
       } else {
         const start = currentRoute[0], end = currentRoute[currentRoute.length - 1];
         const grid = buildGrid(start, end, 10);
-        const landGridMeta = buildGrid(start, end, 20);
+        // Land grid resolution scales with route distance so cell size stays roughly
+        // ~1.5nm even on long routes -- a fixed low resolution left peninsulas and
+        // narrow straits unresolved on longer legs (cells several nm wide).
+        const directNmForGrid = haversineNm(start, end);
+        const landGridN = Math.min(60, Math.max(20, Math.round(directNmForGrid / 1.5)));
+        const landGridMeta = buildGrid(start, end, landGridN);
 
         statusText.textContent = "Checking coastline data…";
         const { landFlags, segments: coastlineSegments } = await fetchCoastlineLandGrid(landGridMeta, (done, total) => {
