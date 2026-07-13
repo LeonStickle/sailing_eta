@@ -1369,7 +1369,10 @@
     clearError();
     currentRoute = tappedPoints.map(p => [p[0], p[1]]);
     const totalNm = currentRoute.slice(0,-1).reduce((sum, p, i) => sum + haversineNm(p, currentRoute[i+1]), 0);
-    routeHint.textContent = `${currentRoute.length} points from map, ${totalNm.toFixed(1)} nm total`;
+    const coordStr = currentRoute.length === 2
+      ? ` (start: ${currentRoute[0][0].toFixed(4)}, ${currentRoute[0][1].toFixed(4)} \u2014 end: ${currentRoute[1][0].toFixed(4)}, ${currentRoute[1][1].toFixed(4)})`
+      : '';
+    routeHint.textContent = `${currentRoute.length} points from map, ${totalNm.toFixed(1)} nm total${coordStr}`;
     checkReady();
   });
 
