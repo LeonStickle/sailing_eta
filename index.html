@@ -1110,11 +1110,17 @@
       for (const pt of frontier) {
         const sample = sampleAt(grid, pt.lat, pt.lon, pt.timeMs);
         let found = tryHeadings(pt, sample, headingCount, timeStepHours);
-        if (found.length === 0) {
-          // Boxed in at the default resolution (common right at a tight harbor
-          // mouth) -- retry this point with finer angles and a shorter hop
-          // before giving up on it entirely.
-          found = tryHeadings(pt, sample, headingCount * 3, timeStepHours * 0.4);
+        if (found.length < 3) {
+          // Few or no viable headings at the default resolution/step. Two
+          // different traps look similar here but need opposite fixes:
+          // - a tight marina mouth needs a SHORTER, finer hop to thread through
+          // - a headland or small point often needs a LONGER hop to clear it
+          //   in one bound, rather than nibbling at it step by step (which is
+          //   what produces long, jittery, near-stationary tangles of legs)
+          // Try both and combine whatever each finds.
+          const fine = tryHeadings(pt, sample, headingCount * 3, timeStepHours * 0.4);
+          const long = tryHeadings(pt, sample, headingCount, timeStepHours * 2.2);
+          found = found.concat(fine, long);
         }
         candidates.push(...found);
       }
