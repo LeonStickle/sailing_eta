@@ -1563,12 +1563,18 @@
 
         // Check the exact tapped/GPX coordinate directly against the coastline data,
         // not the nearest coarse grid cell -- a harbor or narrow inlet can easily sit
-        // closer to land than the grid's own resolution can distinguish.
+        // closer to land than the grid's own resolution can distinguish. This check
+        // is a heuristic based on nearest-coastline-segment geometry, not a survey-
+        // grade water boundary -- it can misfire near harbors, piers, and breakwaters
+        // that aren't tagged as coastline in the underlying map data, so it's a
+        // confirmable warning rather than a hard stop.
         if (classifyPointAgainstCoastline(coastlineSegments, start[0], start[1])) {
-          throw new Error("The start point looks like it's on land, not water -- double check where you tapped or the first point in your GPX.");
+          const proceed = confirm("The start point looks like it might be on land according to coastline data -- but this check can misfire near harbors and marinas. If you're confident this is water, press OK to continue anyway.");
+          if (!proceed) throw new Error("Cancelled -- start point flagged as possible land.");
         }
         if (classifyPointAgainstCoastline(coastlineSegments, end[0], end[1])) {
-          throw new Error("The end point looks like it's on land, not water -- double check where you tapped or the last point in your GPX.");
+          const proceed = confirm("The end point looks like it might be on land according to coastline data -- but this check can misfire near harbors and marinas. If you're confident this is water, press OK to continue anyway.");
+          if (!proceed) throw new Error("Cancelled -- end point flagged as possible land.");
         }
 
         statusText.textContent = "Mapping wind over the search area…";
