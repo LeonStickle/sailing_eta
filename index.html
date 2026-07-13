@@ -1079,31 +1079,44 @@
       }
 
       // Expand frontier: for each point, try candidate headings, collect new candidates
-      const candidates = [];
-      for (const pt of frontier) {
-        const sample = sampleAt(grid, pt.lat, pt.lon, pt.timeMs);
-        for (let h = 0; h < headingCount; h++) {
-          const heading = (h / headingCount) * 360;
+      function tryHeadings(pt, sample, hCount, stepHours) {
+        const found = [];
+        for (let h = 0; h < hCount; h++) {
+          const heading = (h / hCount) * 360;
           const twa = signedAngleDiff(sample.windDirDeg, heading);
           if (Math.abs(twa) < noGoDeg) continue;
           let bsp = boatSpeedFromPolar(sample.twsKts, twa, polarTable);
           bsp *= waveSpeedFactor(sample.waveHeightM, sample.waveDirDeg, heading);
           bsp = Math.max(bsp, 0.5);
           const vmg = vmgOverGround(bsp, heading, sample.currentSpeedKts, sample.currentDirDeg, heading);
-          const distNm = vmg * timeStepHours;
+          const distNm = vmg * stepHours;
           if (distNm <= 0) continue;
           const [newLat, newLon] = destinationPoint([pt.lat, pt.lon], heading, distNm);
-          if (segmentCrossesLand(landGridMeta, landFlags, [pt.lat, pt.lon], [newLat, newLon])) continue; // would cross land
-          const newTimeMs = pt.timeMs + timeStepHours * 3600 * 1000;
+          if (segmentCrossesLand(landGridMeta, landFlags, [pt.lat, pt.lon], [newLat, newLon])) continue;
+          const newTimeMs = pt.timeMs + stepHours * 3600 * 1000;
           const bearingFromStart = bearingDeg(start, [newLat, newLon]);
           const distFromStart = haversineNm(start, [newLat, newLon]);
-          candidates.push({
+          found.push({
             lat: newLat, lon: newLon, timeMs: newTimeMs, bearingFromStart, distFromStart,
             path: pt.path.concat([{ lat: newLat, lon: newLon, timeMs: newTimeMs,
               twsKts: sample.twsKts, twaDeg: twa, boatSpeedKts: bsp, sogKts: vmg,
               waveHeightM: sample.waveHeightM, currentKts: sample.currentSpeedKts }]),
           });
         }
+        return found;
+      }
+
+      const candidates = [];
+      for (const pt of frontier) {
+        const sample = sampleAt(grid, pt.lat, pt.lon, pt.timeMs);
+        let found = tryHeadings(pt, sample, headingCount, timeStepHours);
+        if (found.length === 0) {
+          // Boxed in at the default resolution (common right at a tight harbor
+          // mouth) -- retry this point with finer angles and a shorter hop
+          // before giving up on it entirely.
+          found = tryHeadings(pt, sample, headingCount * 3, timeStepHours * 0.4);
+        }
+        candidates.push(...found);
       }
       if (candidates.length === 0) {
         return { path: frontier[0] ? frontier[0].path : [], etaMs: frontier[0] ? frontier[0].timeMs : startTimeMs, converged: false };
@@ -1455,6 +1468,10 @@
       container.innerHTML = '<div style="padding:16px;font-family:\'IBM Plex Mono\',monospace;font-size:12px;color:var(--text-muted);text-align:center;">Map library didn\'t load \u2014 check your connection and reload.</div>';
       return;
     }
+    if (!legs || legs.length === 0) {
+      container.innerHTML = '<div style="padding:16px;font-family:\'IBM Plex Mono\',monospace;font-size:12px;color:var(--text-muted);text-align:center;">No route found to show \u2014 the search couldn\'t make progress from the start point.</div>';
+      return;
+    }
 
     try {
       const points = [legs[0].start, ...legs.map(l => l.end)];
@@ -1563,10 +1580,14 @@
         const result = computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, landGridMeta, landFlags, (iter, max) => {
           statusProgress.textContent = `step ${iter + 1} / ${max}`;
         });
+        const legs = pathToLegs(result.path);
+
+        if (!result.converged && legs.length === 0) {
+          throw new Error("Couldn't find any sailable heading from the start point -- it may be boxed in by nearby land on every angle tested, or the wind leaves no usable heading there. Try a start point a little further out from shore, or check the wind conditions.");
+        }
         if (!result.converged) {
           showError("Couldn't find a route that reaches the destination within the search limits -- the wind or coastline may make this leg impractical for this quick search, or the start/end points are too far apart. Showing the closest attempt below.");
         }
-        const legs = pathToLegs(result.path);
         const directNm = haversineNm(start, end);
         renderResults(currentRoute, legs, result.etaMs, startTimeMs, noGoDeg, 'fastest', directNm);
       }
