@@ -1028,11 +1028,11 @@
   function computeFastestRoute(start, end, startTimeMs, polarTable, noGoDeg, grid, landGridMeta, landFlags, onProgress) {
     const directNm = haversineNm(start, end);
     const refBearing = bearingDeg(start, end);
-    const timeStepHours = directNm > 30 ? 1.0 : (directNm > 10 ? 0.5 : 0.25);
-    const maxIterations = 80;
-    const headingCount = 24; // 15-degree increments
+    const timeStepHours = directNm > 60 ? 0.75 : (directNm > 20 ? 0.5 : 0.25);
+    const maxIterations = 150;
+    const headingCount = 36; // 10-degree increments
     const binWidthDeg = 5;
-    const binRangeDeg = 110; // search headings up to 110 deg either side of direct bearing
+    const binRangeDeg = 150; // search headings up to 150 deg either side of direct bearing -- real coastal detours can need to point well off the direct line before coming back around
 
     let frontier = [{
       lat: start[0], lon: start[1], timeMs: startTimeMs,
@@ -1061,7 +1061,7 @@
         const vmg = vmgOverGround(bsp, courseToEnd, sample.currentSpeedKts, sample.currentDirDeg, courseToEnd);
         if (vmg <= 0.3) continue;
         const hoursNeeded = remainingNm / vmg;
-        if (hoursNeeded > timeStepHours * 1.5) continue; // too far to finish this step, keep spreading instead
+        if (hoursNeeded > timeStepHours * 2.5) continue; // too far to finish this step, keep spreading instead
         if (segmentCrossesLand(landGridMeta, landFlags, [pt.lat, pt.lon], end)) continue; // would cross land
         const finishTimeMs = pt.timeMs + hoursNeeded * 3600 * 1000;
         if (!bestFinish || finishTimeMs < bestFinish.timeMs) {
