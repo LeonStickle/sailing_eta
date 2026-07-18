@@ -20,6 +20,18 @@
     --signal-warn: #C1553B;
     --border-hairline: #263943;
   }
+  body.light {
+    --bg-deep: #F2EEE4;
+    --bg-panel: #FFFFFF;
+    --bg-panel-raised: #E9E3D4;
+    --accent-brass: #9A741F;
+    --accent-brass-dim: #C8B27A;
+    --text-primary: #23313A;
+    --text-muted: #6B7A82;
+    --signal-good: #2E8B57;
+    --signal-warn: #B4432C;
+    --border-hairline: #D5CDBB;
+  }
 
   * { box-sizing: border-box; }
 
@@ -163,6 +175,46 @@
     margin-bottom: 16px;
   }
   .leaflet-container { background: var(--bg-panel-raised) !important; }
+
+  .theme-toggle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-hairline);
+    border-radius: 6px;
+    color: var(--accent-brass);
+    font-size: 16px;
+    width: 36px;
+    height: 36px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .theme-toggle:hover { border-color: var(--accent-brass); }
+  header { position: relative; }
+
+  .map-wrap { position: relative; }
+  .map-expand-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 900;
+    background: var(--bg-panel);
+    border: 1px solid var(--accent-brass);
+    border-radius: 6px;
+    color: var(--accent-brass);
+    font-size: 15px;
+    width: 32px;
+    height: 32px;
+    cursor: pointer;
+    line-height: 1;
+    opacity: 0.9;
+  }
+  .map-expand-btn:hover { opacity: 1; }
+  .map-wrap.expanded #mapContainer,
+  .map-wrap.expanded #resultsMapContainer {
+    height: 75vh;
+  }
 
   .map-controls {
     display: flex;
@@ -410,6 +462,7 @@
 
 <div class="wrap">
   <header>
+    <button id="themeToggle" class="theme-toggle" title="Switch light/dark">&#9788;</button>
     <p class="brand">SET <span class="amp">&amp;</span> DRIFT</p>
     <p class="tagline">Wind &middot; Wave &middot; Current &middot; ETA</p>
   </header>
@@ -436,7 +489,10 @@
     </div>
 
     <div class="map-section" id="mapSection">
-      <div id="mapContainer"></div>
+      <div class="map-wrap" id="pickerMapWrap">
+        <div id="mapContainer"></div>
+        <button class="map-expand-btn" id="pickerExpandBtn" title="Expand map">&#x2922;</button>
+      </div>
       <div class="map-point-count" id="mapPointCount">Tap the map to place a point</div>
       <div class="map-controls">
         <button class="map-btn" id="mapUndoBtn" disabled>Undo</button>
@@ -496,7 +552,10 @@
 
     <div class="warn-banner" id="warnBanner" style="display:none;"></div>
 
-    <div id="resultsMapContainer"></div>
+    <div class="map-wrap" id="resultsMapWrap">
+      <div id="resultsMapContainer"></div>
+      <button class="map-expand-btn" id="resultsExpandBtn" title="Expand map">&#x2922;</button>
+    </div>
 
     <div class="legs-header">Leg by leg</div>
     <div id="legsList"></div>
@@ -1288,6 +1347,42 @@
   let tappedLine = null;
   const DEFAULT_MAP_CENTER = [55.68, 12.60]; // fallback if geolocation unavailable
 
+  // ---------------------------------------------------------------------
+  // Theme (dark/light) + map expand controls
+  // ---------------------------------------------------------------------
+  let pickerBaseTiles = null;
+  let resultsBaseTiles = null;
+  let lightTheme = false;
+
+  function currentTileUrl() {
+    return lightTheme
+      ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+      : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  }
+
+  const themeToggle = document.getElementById('themeToggle');
+  themeToggle.addEventListener('click', () => {
+    lightTheme = !lightTheme;
+    document.body.classList.toggle('light', lightTheme);
+    themeToggle.innerHTML = lightTheme ? '&#9789;' : '&#9788;'; // moon in light mode, sun in dark
+    if (pickerBaseTiles) pickerBaseTiles.setUrl(currentTileUrl());
+    if (resultsBaseTiles) resultsBaseTiles.setUrl(currentTileUrl());
+  });
+
+  function wireExpand(btnId, wrapId, getMap) {
+    const btn = document.getElementById(btnId);
+    const wrap = document.getElementById(wrapId);
+    btn.addEventListener('click', () => {
+      const expanded = wrap.classList.toggle('expanded');
+      btn.innerHTML = expanded ? '&#x2921;' : '&#x2922;';
+      btn.title = expanded ? 'Collapse map' : 'Expand map';
+      const m = getMap();
+      if (m) setTimeout(() => m.invalidateSize(), 60);
+    });
+  }
+  wireExpand('pickerExpandBtn', 'pickerMapWrap', () => leafletMap);
+  wireExpand('resultsExpandBtn', 'resultsMapWrap', () => resultsMap);
+
   function initMap() {
     if (leafletMap) return;
     if (typeof L === 'undefined') {
@@ -1295,7 +1390,7 @@
       return;
     }
     leafletMap = L.map('mapContainer', { zoomControl: true }).setView(DEFAULT_MAP_CENTER, 10);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    pickerBaseTiles = L.tileLayer(currentTileUrl(), {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
       maxZoom: 18,
     }).addTo(leafletMap);
@@ -1508,7 +1603,7 @@
       if (!resultsMap) {
         resultsMap = L.map('resultsMapContainer', { zoomControl: true, attributionControl: true });
         resultsMap.fitBounds(bounds, { padding: [24, 24] }); // establishes an initial view before any layers are added
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        resultsBaseTiles = L.tileLayer(currentTileUrl(), {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
           maxZoom: 18,
         }).addTo(resultsMap);
