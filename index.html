@@ -215,6 +215,126 @@
   .map-wrap.expanded #resultsMapContainer {
     height: 75vh;
   }
+  .wind-toggle-btn { top: 46px; font-size: 13px; }
+  .wind-toggle-btn.off { opacity: 0.45; border-color: var(--border-hairline); color: var(--text-muted); }
+
+  .motor-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    flex-wrap: wrap;
+  }
+  .motor-label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .motor-speed {
+    width: 64px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-hairline);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 6px 8px;
+  }
+
+  button.secondary {
+    width: 100%;
+    margin-top: 10px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--accent-brass);
+    border-radius: 8px;
+    color: var(--accent-brass);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 13px;
+    cursor: pointer;
+  }
+  button.secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .opt-summary {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--signal-good);
+    margin-bottom: 10px;
+  }
+  .opt-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 120px;
+    margin-bottom: 6px;
+  }
+  .opt-bar {
+    flex: 1;
+    background: var(--accent-brass-dim);
+    border-radius: 2px 2px 0 0;
+    cursor: pointer;
+    position: relative;
+    min-width: 3px;
+  }
+  .opt-bar:hover { background: var(--accent-brass); }
+  .opt-bar.best { background: var(--signal-good); }
+  .opt-bar.failed { background: var(--signal-warn); opacity: 0.5; }
+  .opt-bar .opt-lbl {
+    position: absolute;
+    bottom: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .opt-bars { margin-bottom: 22px; }
+
+  .wx-summary {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-hairline);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--text-muted);
+  }
+  .wx-summary .wx-warn { color: var(--signal-warn); }
+
+  .wind-arrow-icon {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+  }
+  .wind-arrow-icon .wa-glyph {
+    font-size: 15px;
+    line-height: 1;
+    color: var(--accent-brass);
+    text-shadow: 0 0 3px rgba(0,0,0,0.6);
+  }
+  .wind-arrow-icon .wa-lbl {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: var(--text-primary);
+    text-shadow: 0 0 3px rgba(0,0,0,0.8);
+  }
+  body.light .wind-arrow-icon .wa-glyph { text-shadow: 0 0 3px rgba(255,255,255,0.8); }
+  body.light .wind-arrow-icon .wa-lbl { text-shadow: 0 0 3px rgba(255,255,255,0.9); }
+  .wind-arrow-icon.strong .wa-glyph { color: var(--signal-warn); }
+
+  .motor-badge {
+    display: inline-block;
+    background: rgba(200, 155, 60, 0.15);
+    border: 1px solid var(--accent-brass-dim);
+    border-radius: 4px;
+    color: var(--accent-brass);
+    font-size: 10px;
+    padding: 1px 5px;
+    letter-spacing: 0.04em;
+    vertical-align: 1px;
+  }
 
   .map-controls {
     display: flex;
@@ -526,9 +646,22 @@
       <option value="kitt25">Kitt 25 (Palle Mortensen) &mdash; estimated</option>
     </select>
     <div class="hint" id="boatHint">A rough stand-in polar &mdash; not this specific boat.</div>
+    <div class="motor-row">
+      <label class="motor-label"><input type="checkbox" id="motorToggle"> Motor-sail when sailing is slower than</label>
+      <input type="number" id="motorSpeedInput" value="4.5" min="1" max="10" step="0.5" class="motor-speed"> kt
+    </div>
+    <div class="hint">With this on, the engine kicks in (at the speed above) whenever sailing would be slower &mdash; including straight upwind.</div>
   </div>
 
   <button class="primary" id="calcButton" disabled>Calculate ETA</button>
+  <button class="secondary" id="optimizeButton" disabled>Find best departure (next 48 h)</button>
+
+  <div class="panel" id="optimizerPanel" style="display:none;">
+    <span class="field-label">Departure sweep</span>
+    <div class="opt-summary" id="optSummary"></div>
+    <div class="opt-bars" id="optBars"></div>
+    <div class="hint">Each bar is a departure time; height shows trip duration (shorter is better). Tap a bar to use that departure.</div>
+  </div>
 
   <div class="status" id="statusBox">
     <div class="compass">
@@ -548,6 +681,7 @@
       <div class="stat-row"><span class="stat-label">Distance</span><span class="stat-value" id="statDist">--</span></div>
       <div class="stat-row"><span class="stat-label">Underway</span><span class="stat-value" id="statDuration">--</span></div>
       <div class="stat-row"><span class="stat-label">Departure</span><span class="stat-value" id="statDeparture">--</span></div>
+      <div class="wx-summary" id="wxSummary" style="display:none;"></div>
     </div>
 
     <div class="warn-banner" id="warnBanner" style="display:none;"></div>
@@ -555,6 +689,7 @@
     <div class="map-wrap" id="resultsMapWrap">
       <div id="resultsMapContainer"></div>
       <button class="map-expand-btn" id="resultsExpandBtn" title="Expand map">&#x2922;</button>
+      <button class="map-expand-btn wind-toggle-btn" id="windToggleBtn" title="Toggle wind layer">&#x21D6;</button>
     </div>
 
     <div class="legs-header">Leg by leg</div>
@@ -664,6 +799,24 @@
     return ys[ys.length-1];
   }
 
+  // ---------------------------------------------------------------------
+  // Motor-sailing: when enabled, the engine kicks in (at MOTOR.kts) any
+  // time sailing would be slower -- including headings inside the no-go
+  // zone, where a motorsailer would simply motor straight upwind. The wave
+  // slowdown factor still applies while motoring (head seas slow a motor
+  // too). Set from the UI at calculation time.
+  // ---------------------------------------------------------------------
+  const MOTOR = { enabled: false, kts: 4.5 };
+
+  function sailOrMotor(sailBspKts, waveFactor) {
+    const sail = sailBspKts * waveFactor;
+    if (MOTOR.enabled) {
+      const motor = MOTOR.kts * waveFactor;
+      if (motor > sail) return { bsp: Math.max(motor, 0.5), motoring: true };
+    }
+    return { bsp: Math.max(sail, 0.5), motoring: false };
+  }
+
   function boatSpeedFromPolar(twsKts, twaDeg, polarTable) {
     let twa = Math.abs(twaDeg) % 360;
     if (twa > 180) twa = 360 - twa;
@@ -754,7 +907,7 @@
     const key = cacheKey(lat, lon);
     if (windCache.has(key)) return windCache.get(key);
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-      `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=kn&timezone=UTC&forecast_days=10`;
+      `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kn&timezone=UTC&forecast_days=10`;
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`Wind lookup failed (${resp.status}) near ${lat.toFixed(2)},${lon.toFixed(2)}`);
     const json = await resp.json();
@@ -762,6 +915,7 @@
       times: json.hourly.time.map(t => new Date(t + "Z").getTime()),
       speed: json.hourly.wind_speed_10m,
       dir: json.hourly.wind_direction_10m,
+      gust: json.hourly.wind_gusts_10m || null,
     };
     windCache.set(key, series);
     return series;
@@ -864,6 +1018,8 @@
       let remaining = legDist, pos = legStart;
       const legStartTimeMs = currentTimeMs;
       const bsps = [], sogs = [], twss = [], twas = [], waveHs = [], currs = [];
+      let maxGust = null;
+      let motorHours = 0, totalHours = 0;
 
       while (remaining > 1e-6) {
         const [lat, lon] = pos;
@@ -873,6 +1029,8 @@
         const wIdx = nearestIndex(windSeries.times, currentTimeMs);
         const twsKts = windSeries.speed[wIdx];
         const windDirDeg = windSeries.dir[wIdx];
+        const gustKts = windSeries.gust ? windSeries.gust[wIdx] : null;
+        if (gustKts != null && (maxGust == null || gustKts > maxGust)) maxGust = gustKts;
 
         let waveHeightM = null, waveDirDeg = null, currentSpeedKts = null, currentDirDeg = null;
         if (marineSeries) {
@@ -885,9 +1043,10 @@
         }
 
         const twa = signedAngleDiff(windDirDeg, course);
-        let bsp = boatSpeedFromPolar(twsKts, twa, polarTable);
-        bsp *= waveSpeedFactor(waveHeightM, waveDirDeg, course);
-        bsp = Math.max(bsp, 0.5);
+        const sailBsp = boatSpeedFromPolar(twsKts, twa, polarTable);
+        const wf = waveSpeedFactor(waveHeightM, waveDirDeg, course);
+        const sm = sailOrMotor(sailBsp, wf);
+        const bsp = sm.bsp;
 
         let vmg = vmgOverGround(bsp, course, currentSpeedKts, currentDirDeg, course);
         vmg = Math.max(vmg, 0.3);
@@ -898,6 +1057,8 @@
         pos = destinationPoint(pos, course, chunk);
         remaining -= chunk;
 
+        totalHours += hours;
+        if (sm.motoring) motorHours += hours;
         bsps.push(bsp); sogs.push(vmg); twss.push(twsKts); twas.push(Math.abs(twa));
         if (waveHeightM != null) waveHs.push(waveHeightM);
         if (currentSpeedKts != null) currs.push(currentSpeedKts);
@@ -911,6 +1072,8 @@
         avgTwsKts: avg(twss), avgTwaDeg: avg(twas),
         avgWaveHeightM: waveHs.length ? avg(waveHs) : null,
         avgCurrentKts: currs.length ? avg(currs) : null,
+        maxGustKts: maxGust,
+        motorFrac: totalHours > 0 ? motorHours / totalHours : 0,
       });
     }
     return { legs, etaMs: currentTimeMs };
@@ -966,6 +1129,7 @@
     const { wind, marine } = nearestGridSeries(gridMeta, lat, lon);
     const wIdx = nearestIndex(wind.times, timeMs);
     const twsKts = wind.speed[wIdx];
+    const gustKts = wind.gust ? wind.gust[wIdx] : null;
     const windDirDeg = wind.dir[wIdx];
     let waveHeightM = null, waveDirDeg = null, currentSpeedKts = null, currentDirDeg = null;
     if (marine) {
@@ -976,7 +1140,7 @@
       currentSpeedKts = raw != null ? raw * KMH_TO_KTS : null;
       currentDirDeg = marine.currentDir ? marine.currentDir[mIdx] : null;
     }
-    return { twsKts, windDirDeg, waveHeightM, waveDirDeg, currentSpeedKts, currentDirDeg };
+    return { twsKts, gustKts, windDirDeg, waveHeightM, waveDirDeg, currentSpeedKts, currentDirDeg };
   }
 
   // ---------------------------------------------------------------------
@@ -1122,10 +1286,12 @@
         const courseToEnd = bearingDeg([pt.lat, pt.lon], end);
         const sample = sampleAt(grid, pt.lat, pt.lon, pt.timeMs);
         const twa = signedAngleDiff(sample.windDirDeg, courseToEnd);
-        if (Math.abs(twa) < noGoDeg) continue; // can't point directly at destination
-        let bsp = boatSpeedFromPolar(sample.twsKts, twa, polarTable);
-        bsp *= waveSpeedFactor(sample.waveHeightM, sample.waveDirDeg, courseToEnd);
-        bsp = Math.max(bsp, 0.5);
+        const inNoGo = Math.abs(twa) < noGoDeg;
+        if (inNoGo && !MOTOR.enabled) continue; // can't point directly at destination under sail
+        const sailBsp = inNoGo ? 0 : boatSpeedFromPolar(sample.twsKts, twa, polarTable);
+        const wf = waveSpeedFactor(sample.waveHeightM, sample.waveDirDeg, courseToEnd);
+        const sm = sailOrMotor(sailBsp, wf);
+        const bsp = sm.bsp;
         const vmg = vmgOverGround(bsp, courseToEnd, sample.currentSpeedKts, sample.currentDirDeg, courseToEnd);
         if (vmg <= 0.3) continue;
         const hoursNeeded = remainingNm / vmg;
@@ -1136,7 +1302,8 @@
           bestFinish = {
             point: pt, timeMs: finishTimeMs,
             extraLeg: { lat: end[0], lon: end[1], timeMs: finishTimeMs, twsKts: sample.twsKts, twaDeg: twa,
-                        boatSpeedKts: bsp, sogKts: vmg, waveHeightM: sample.waveHeightM, currentKts: sample.currentSpeedKts },
+                        boatSpeedKts: bsp, sogKts: vmg, waveHeightM: sample.waveHeightM, currentKts: sample.currentSpeedKts,
+                        gustKts: sample.gustKts, motoring: sm.motoring },
           };
         }
       }
@@ -1152,10 +1319,12 @@
         for (let h = 0; h < hCount; h++) {
           const heading = (h / hCount) * 360;
           const twa = signedAngleDiff(sample.windDirDeg, heading);
-          if (Math.abs(twa) < noGoDeg) continue;
-          let bsp = boatSpeedFromPolar(sample.twsKts, twa, polarTable);
-          bsp *= waveSpeedFactor(sample.waveHeightM, sample.waveDirDeg, heading);
-          bsp = Math.max(bsp, 0.5);
+          const inNoGo = Math.abs(twa) < noGoDeg;
+          if (inNoGo && !MOTOR.enabled) continue;
+          const sailBsp = inNoGo ? 0 : boatSpeedFromPolar(sample.twsKts, twa, polarTable);
+          const wf = waveSpeedFactor(sample.waveHeightM, sample.waveDirDeg, heading);
+          const sm = sailOrMotor(sailBsp, wf);
+          const bsp = sm.bsp;
           const vmg = vmgOverGround(bsp, heading, sample.currentSpeedKts, sample.currentDirDeg, heading);
           const distNm = vmg * stepHours;
           if (distNm <= 0) continue;
@@ -1168,7 +1337,8 @@
             lat: newLat, lon: newLon, timeMs: newTimeMs, bearingFromStart, distFromStart,
             path: pt.path.concat([{ lat: newLat, lon: newLon, timeMs: newTimeMs,
               twsKts: sample.twsKts, twaDeg: twa, boatSpeedKts: bsp, sogKts: vmg,
-              waveHeightM: sample.waveHeightM, currentKts: sample.currentSpeedKts }]),
+              waveHeightM: sample.waveHeightM, currentKts: sample.currentSpeedKts,
+              gustKts: sample.gustKts, motoring: sm.motoring }]),
           });
         }
         return found;
@@ -1241,6 +1411,8 @@
         avgBoatSpeedKts: b.boatSpeedKts, avgSogKts: b.sogKts,
         avgTwsKts: b.twsKts, avgTwaDeg: Math.abs(b.twaDeg),
         avgWaveHeightM: b.waveHeightM, avgCurrentKts: b.currentKts,
+        maxGustKts: b.gustKts != null ? b.gustKts : null,
+        motorFrac: b.motoring ? 1 : 0,
       });
     }
     return legs;
@@ -1295,7 +1467,9 @@
   }
 
   function checkReady() {
-    calcButton.disabled = !(currentRoute && departureInput.value);
+    const ready = !!(currentRoute && departureInput.value);
+    calcButton.disabled = !ready;
+    document.getElementById('optimizeButton').disabled = !ready;
   }
 
   dropzone.addEventListener('click', () => fileInput.click());
@@ -1545,7 +1719,7 @@
       const tackCount = legs.length - 1;
       warnBanner.innerHTML = `Sailed distance is <strong>${totalNm.toFixed(1)} nm</strong> vs <strong>${directNm.toFixed(1)} nm</strong> direct (${extraNm > 0.1 ? '+' + extraNm.toFixed(1) + ' nm from tacking' : 'straight shot, no tacking needed'})${tackCount > 0 ? `, across ${tackCount} heading change${tackCount>1?'s':''}` : ''}.`;
     } else {
-      const nogoLegs = legs.filter(l => l.avgTwaDeg < noGoDeg);
+      const nogoLegs = legs.filter(l => l.avgTwaDeg < noGoDeg && !(l.motorFrac > 0));
       if (nogoLegs.length > 0) {
         const nogoNm = nogoLegs.reduce((s,l) => s + l.distanceNm, 0);
         warnBanner.style.display = 'block';
@@ -1559,25 +1733,57 @@
 
     const legsList = document.getElementById('legsList');
     legsList.innerHTML = legs.map(leg => {
-      const favorable = leg.avgTwaDeg < noGoDeg ? 'nogo' : (leg.avgTwaDeg > 60 ? 'good' : 'neutral');
+      const motoring = (leg.motorFrac || 0) > 0;
+      const favorable = (leg.avgTwaDeg < noGoDeg && !motoring) ? 'nogo' : (leg.avgTwaDeg > 60 ? 'good' : 'neutral');
       const durH = (leg.endTimeMs - leg.startTimeMs) / 3600000;
       let extras = [];
+      if (leg.maxGustKts != null && leg.maxGustKts >= leg.avgTwsKts + 5) extras.push(`gusts ${leg.maxGustKts.toFixed(0)}kt`);
       if (leg.avgWaveHeightM != null) extras.push(`wave ${leg.avgWaveHeightM.toFixed(1)}m`);
       if (leg.avgCurrentKts != null) extras.push(`current ${leg.avgCurrentKts.toFixed(1)}kt`);
       const extraStr = extras.length ? ` &middot; ${extras.join(', ')}` : '';
+      const motorBadge = motoring ? ` <span class="motor-badge">&#9881; motor${leg.motorFrac < 1 ? ' ' + Math.round(leg.motorFrac*100) + '%' : ''}</span>` : '';
       return `
         <div class="leg-item">
           <div class="leg-arrow">${twaArrowSvg(0, favorable)}</div>
           <div class="leg-info">
-            <div class="leg-dist">${leg.distanceNm.toFixed(1)} nm &middot; ${fmtDuration(durH)}</div>
+            <div class="leg-dist">${leg.distanceNm.toFixed(1)} nm &middot; ${fmtDuration(durH)}${motorBadge}</div>
             <div class="leg-meta">${leg.avgBoatSpeedKts.toFixed(1)}kt boat, ${leg.avgSogKts.toFixed(1)}kt SOG &middot; TWS ${leg.avgTwsKts.toFixed(0)}kt, TWA ${leg.avgTwaDeg.toFixed(0)}&deg;${extraStr}</div>
           </div>
           <div class="leg-eta">${fmtTimeShort(leg.endTimeMs)}</div>
         </div>`;
     }).join('');
 
+    renderWxSummary(legs);
+
     resultsBox.classList.add('active');
     renderRouteOnMap(legs, noGoDeg);
+  }
+
+  // Weather-along-route summary: peak conditions and when/where they hit.
+  function renderWxSummary(legs) {
+    const el = document.getElementById('wxSummary');
+    if (!legs || legs.length === 0) { el.style.display = 'none'; return; }
+    let peakWind = null, peakGust = null, peakWave = null;
+    legs.forEach((l, i) => {
+      if (l.avgTwsKts != null && (!peakWind || l.avgTwsKts > peakWind.v)) peakWind = { v: l.avgTwsKts, t: l.startTimeMs, i };
+      if (l.maxGustKts != null && (!peakGust || l.maxGustKts > peakGust.v)) peakGust = { v: l.maxGustKts, t: l.startTimeMs, i };
+      if (l.avgWaveHeightM != null && (!peakWave || l.avgWaveHeightM > peakWave.v)) peakWave = { v: l.avgWaveHeightM, t: l.startTimeMs, i };
+    });
+    const motorH = legs.reduce((s,l) => s + (l.motorFrac || 0) * (l.endTimeMs - l.startTimeMs), 0) / 3600000;
+    const parts = [];
+    if (peakWind) parts.push(`Peak wind ${peakWind.v.toFixed(0)} kt around ${fmtTimeShort(peakWind.t)}`);
+    if (peakGust) {
+      const cls = peakGust.v >= 25 ? ' class="wx-warn"' : '';
+      parts.push(`<span${cls}>gusts to ${peakGust.v.toFixed(0)} kt${peakGust.v >= 25 ? ' &#9888;' : ''}</span>`);
+    }
+    if (peakWave) {
+      const cls = peakWave.v >= 1.5 ? ' class="wx-warn"' : '';
+      parts.push(`<span${cls}>waves to ${peakWave.v.toFixed(1)} m around ${fmtTimeShort(peakWave.t)}${peakWave.v >= 1.5 ? ' &#9888;' : ''}</span>`);
+    }
+    if (motorH > 0.05) parts.push(`&#9881; ~${fmtDuration(motorH)} under motor`);
+    if (parts.length === 0) { el.style.display = 'none'; return; }
+    el.innerHTML = parts.join(' &middot; ');
+    el.style.display = 'block';
   }
 
   // ---------------------------------------------------------------------
@@ -1618,7 +1824,7 @@
       }
 
       legs.forEach(leg => {
-        const nogo = leg.avgTwaDeg < noGoDeg;
+        const nogo = leg.avgTwaDeg < noGoDeg && !(leg.motorFrac > 0);
         L.polyline([leg.start, leg.end], {
           color: nogo ? '#C1553B' : '#C89B3C',
           weight: 3,
@@ -1631,6 +1837,9 @@
       L.circleMarker(points[points.length - 1], { radius: 7, color: '#C1553B', fillColor: '#C1553B', fillOpacity: 0.9, weight: 2 })
         .addTo(resultsMap).bindTooltip('Finish', { permanent: false });
 
+      buildWindLayer(legs);
+      if (windLayerOn && windLayer) windLayer.addTo(resultsMap);
+
       resultsMap.invalidateSize();
       resultsMap.fitBounds(bounds, { padding: [24, 24] });
       setTimeout(() => {
@@ -1641,6 +1850,56 @@
       container.innerHTML = `<div style="padding:16px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--signal-warn);text-align:center;">Map error: ${err.message}</div>`;
     }
   }
+
+  // ---------------------------------------------------------------------
+  // Wind layer: arrows over the map showing the wind field at mid-passage
+  // time, built from the already-fetched forecast points (no extra network
+  // calls). Toggle with the wind button on the results map.
+  // ---------------------------------------------------------------------
+  let windLayer = null;
+  let windLayerOn = true;
+
+  function buildWindLayer(legs) {
+    windLayer = null;
+    if (!legs || legs.length === 0) return;
+    const midTimeMs = (legs[0].startTimeMs + legs[legs.length - 1].endTimeMs) / 2;
+    const markers = [];
+    const seen = new Set();
+    for (const [key, series] of windCache.entries()) {
+      if (!series || !series.times) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const [latS, lonS] = key.split(',');
+      const lat = parseFloat(latS), lon = parseFloat(lonS);
+      if (isNaN(lat) || isNaN(lon)) continue;
+      const idx = nearestIndex(series.times, midTimeMs);
+      const spd = series.speed[idx], dir = series.dir[idx];
+      if (spd == null || dir == null) continue;
+      const strong = spd >= 17;
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="wind-arrow-icon${strong ? ' strong' : ''}"><div class="wa-glyph" style="transform:rotate(${(dir + 180) % 360}deg)">&#8593;</div><div class="wa-lbl">${Math.round(spd)}</div></div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13],
+      });
+      markers.push(L.marker([lat, lon], { icon, interactive: false }));
+    }
+    if (markers.length === 0) return;
+    // Thin dense sets so the map stays readable
+    const maxArrows = 80;
+    const step = Math.max(1, Math.ceil(markers.length / maxArrows));
+    windLayer = L.layerGroup(markers.filter((_, i) => i % step === 0));
+  }
+
+  const windToggleBtn = document.getElementById('windToggleBtn');
+  windToggleBtn.addEventListener('click', () => {
+    windLayerOn = !windLayerOn;
+    windToggleBtn.classList.toggle('off', !windLayerOn);
+    if (windLayer && resultsMap) {
+      if (windLayerOn) windLayer.addTo(resultsMap);
+      else resultsMap.removeLayer(windLayer);
+    }
+  });
 
   calcButton.addEventListener('click', async () => {
     if (!currentRoute) return;
@@ -1658,6 +1917,8 @@
       const polarTable = POLARS[boatSelect.value].table;
       const noGoDeg = POLARS[boatSelect.value].noGoDeg;
       const mode = modeSelect.value;
+      MOTOR.enabled = document.getElementById('motorToggle').checked;
+      MOTOR.kts = Math.max(0.5, parseFloat(document.getElementById('motorSpeedInput').value) || 4.5);
 
       if (mode === 'fixed') {
         const samplePoints = buildSamplePoints(currentRoute);
@@ -1710,6 +1971,131 @@
       showError(err.message || "Something went wrong fetching weather data. Check your connection and try again.");
     } finally {
       statusBox.classList.remove('active');
+      calcButton.disabled = false;
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Departure optimizer: sweeps departure times over the next 48h and
+  // charts trip duration for each, so you can pick the fastest window.
+  // Fixed mode is cheap (hourly steps); fastest mode runs the full route
+  // search per sample, so it steps every 4h to stay responsive.
+  // ---------------------------------------------------------------------
+  const optimizeButton = document.getElementById('optimizeButton');
+  const optimizerPanel = document.getElementById('optimizerPanel');
+  const optSummary = document.getElementById('optSummary');
+  const optBars = document.getElementById('optBars');
+
+  function fmtLocalInput(ms) {
+    const d = new Date(ms);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  function fmtDepLabel(ms) {
+    const d = new Date(ms);
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return `${days[d.getDay()]} ${String(d.getHours()).padStart(2,'0')}:00`;
+  }
+
+  optimizeButton.addEventListener('click', async () => {
+    if (!currentRoute) return;
+    clearError();
+    optimizerPanel.style.display = 'none';
+    optimizeButton.disabled = true;
+    calcButton.disabled = true;
+    statusBox.classList.add('active');
+    statusText.textContent = "Testing departure times…";
+    statusProgress.textContent = "";
+
+    try {
+      const baseMs = new Date(departureInput.value).getTime();
+      if (isNaN(baseMs)) throw new Error("Pick a valid departure date and time first.");
+
+      const polarTable = POLARS[boatSelect.value].table;
+      const noGoDeg = POLARS[boatSelect.value].noGoDeg;
+      const mode = modeSelect.value;
+      MOTOR.enabled = document.getElementById('motorToggle').checked;
+      MOTOR.kts = Math.max(0.5, parseFloat(document.getElementById('motorSpeedInput').value) || 4.5);
+
+      const stepH = mode === 'fastest' ? 4 : 1;
+      const count = mode === 'fastest' ? 13 : 49; // both cover 48h
+
+      let grid = null, start = null, end = null;
+      if (mode === 'fixed') {
+        const samplePoints = buildSamplePoints(currentRoute);
+        statusText.textContent = "Reading wind over water…";
+        await prefetchAll(samplePoints, (done, total) => {
+          statusProgress.textContent = `${done} / ${total} points`;
+        });
+      } else {
+        start = currentRoute[0]; end = currentRoute[currentRoute.length - 1];
+        if (isLandAt(start[0], start[1]) || isLandAt(end[0], end[1])) {
+          throw new Error("Start or end point sits on land according to the embedded data -- run a normal Calculate first to confirm past the warning, then adjust the point if needed.");
+        }
+        grid = buildGrid(start, end, 10);
+        statusText.textContent = "Mapping wind over the search area…";
+        await prefetchAll(grid.points, (done, total) => {
+          statusProgress.textContent = `${done} / ${total} points`;
+        });
+      }
+
+      statusText.textContent = "Testing departure times…";
+      const results = [];
+      for (let i = 0; i < count; i++) {
+        const depMs = baseMs + i * stepH * 3600 * 1000;
+        statusProgress.textContent = `${i + 1} / ${count}`;
+        await new Promise(r => setTimeout(r, 0)); // let the UI breathe
+        try {
+          if (mode === 'fixed') {
+            const { etaMs } = simulateRoute(currentRoute, depMs, polarTable);
+            results.push({ depMs, durH: (etaMs - depMs) / 3600000, ok: true });
+          } else {
+            const r = computeFastestRoute(start, end, depMs, polarTable, noGoDeg, grid, () => {});
+            results.push({ depMs, durH: (r.etaMs - depMs) / 3600000, ok: r.converged });
+          }
+        } catch (e) {
+          results.push({ depMs, durH: null, ok: false });
+        }
+      }
+
+      const okResults = results.filter(r => r.ok && r.durH != null);
+      if (okResults.length === 0) throw new Error("No departure in the next 48 h produced a route -- the wind may make this leg impractical right now.");
+      const best = okResults.reduce((a, b) => (b.durH < a.durH ? b : a));
+      const maxDur = Math.max(...okResults.map(r => r.durH));
+      const minDur = best.durH;
+
+      optSummary.innerHTML = `Best: depart <strong>${fmtDepLabel(best.depMs)}</strong> &rarr; ${fmtDuration(best.durH)} underway`;
+      optBars.innerHTML = '';
+      results.forEach((r, i) => {
+        const bar = document.createElement('div');
+        bar.className = 'opt-bar' + (r === best ? ' best' : '') + (!r.ok ? ' failed' : '');
+        const h = r.ok && r.durH != null
+          ? 30 + 90 * ((r.durH - minDur) / Math.max(0.01, maxDur - minDur))
+          : 14;
+        bar.style.height = `${h}px`;
+        bar.title = r.ok
+          ? `${fmtDepLabel(r.depMs)} \u2014 ${fmtDuration(r.durH)}`
+          : `${fmtDepLabel(r.depMs)} \u2014 no route found`;
+        const lblEvery = mode === 'fastest' ? 3 : 8;
+        if (i % lblEvery === 0) {
+          const lbl = document.createElement('div');
+          lbl.className = 'opt-lbl';
+          lbl.textContent = fmtDepLabel(r.depMs).split(' ')[1];
+          bar.appendChild(lbl);
+        }
+        bar.addEventListener('click', () => {
+          departureInput.value = fmtLocalInput(r.depMs);
+          calcButton.click();
+        });
+        optBars.appendChild(bar);
+      });
+      optimizerPanel.style.display = 'block';
+      optimizerPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (err) {
+      showError(err.message || "Something went wrong during the departure sweep.");
+    } finally {
+      statusBox.classList.remove('active');
+      optimizeButton.disabled = false;
       calcButton.disabled = false;
     }
   });
