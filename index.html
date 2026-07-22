@@ -336,6 +336,42 @@
     vertical-align: 1px;
   }
 
+  .map-legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: 8px 0 16px;
+  }
+  .leg-swatch {
+    display: inline-block;
+    width: 16px;
+    height: 3px;
+    margin-right: 5px;
+    vertical-align: 2px;
+  }
+  .leg-swatch.sail { background: #C89B3C; }
+  .leg-swatch.motor { background: #5B8AA6; background-image: linear-gradient(90deg, #5B8AA6 60%, transparent 60%); background-size: 5px 3px; }
+  .leg-swatch.nogo { background: #C1553B; }
+
+  .snapshot-btn {
+    width: 100%;
+    margin-top: 14px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--accent-brass);
+    border-radius: 8px;
+    color: var(--accent-brass);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    padding: 11px;
+    cursor: pointer;
+  }
+  .snapshot-btn:hover { background: rgba(200,155,60,0.12); }
+  .snapshot-btn:disabled { opacity: 0.5; cursor: default; }
+
   .map-controls {
     display: flex;
     gap: 8px;
@@ -682,6 +718,7 @@
       <div class="stat-row"><span class="stat-label">Underway</span><span class="stat-value" id="statDuration">--</span></div>
       <div class="stat-row"><span class="stat-label">Departure</span><span class="stat-value" id="statDeparture">--</span></div>
       <div class="wx-summary" id="wxSummary" style="display:none;"></div>
+      <button class="snapshot-btn" id="snapshotBtn">&#128247; Save snapshot</button>
     </div>
 
     <div class="warn-banner" id="warnBanner" style="display:none;"></div>
@@ -690,6 +727,11 @@
       <div id="resultsMapContainer"></div>
       <button class="map-expand-btn" id="resultsExpandBtn" title="Expand map">&#x2922;</button>
       <button class="map-expand-btn wind-toggle-btn" id="windToggleBtn" title="Toggle wind layer">&#x21D6;</button>
+    </div>
+    <div class="map-legend">
+      <span><span class="leg-swatch sail"></span>Sailing</span>
+      <span><span class="leg-swatch motor"></span>Motoring</span>
+      <span><span class="leg-swatch nogo"></span>Unsailable (no motor)</span>
     </div>
 
     <div class="legs-header">Leg by leg</div>
@@ -1662,6 +1704,11 @@
     generic: "A rough stand-in polar \u2014 not this specific boat.",
     kitt25: "Estimated from published specs (hull speed, SA/D, full keel) \u2014 no measured polar exists for this boat. Treat as a rough guide, not exact.",
   };
+  const BOAT_NAMES = {
+    generic: "Generic 35ft cruiser",
+    kitt25: "Kitt 25 (Palle Mortensen)",
+  };
+  let lastResult = null;
   boatSelect.addEventListener('change', () => {
     boatHint.textContent = BOAT_HINTS[boatSelect.value] || "";
   });
@@ -1702,6 +1749,9 @@
   function renderResults(route, legs, etaMs, startMs, noGoDeg, routeMode, directNm) {
     const totalNm = legs.reduce((s,l) => s + l.distanceNm, 0);
     const totalHours = (etaMs - startMs) / 3600000;
+
+    lastResult = { route, legs, etaMs, startMs, noGoDeg, routeMode, directNm, totalNm, totalHours,
+      boatName: BOAT_NAMES[boatSelect.value] || boatSelect.value, motorOn: MOTOR.enabled };
 
     document.getElementById('etaHeadline').textContent = fmtTimeShort(etaMs);
     document.getElementById('etaSub').textContent = `arriving ${fmtTime(etaMs)}`;
@@ -1825,10 +1875,12 @@
 
       legs.forEach(leg => {
         const nogo = leg.avgTwaDeg < noGoDeg && !(leg.motorFrac > 0);
+        const motoring = (leg.motorFrac || 0) > 0;
         L.polyline([leg.start, leg.end], {
-          color: nogo ? '#C1553B' : '#C89B3C',
+          color: motoring ? '#5B8AA6' : (nogo ? '#C1553B' : '#C89B3C'),
           weight: 3,
           opacity: 0.85,
+          dashArray: motoring ? '2,6' : null,
         }).addTo(resultsMap);
       });
 
@@ -2097,6 +2149,153 @@
       statusBox.classList.remove('active');
       optimizeButton.disabled = false;
       calcButton.disabled = false;
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Snapshot: renders a self-contained summary graphic (route over a land
+  // silhouette, key stats, conditions) as a downloadable PNG. Built as raw
+  // SVG rather than capturing the live Leaflet map, since the live map's
+  // tiles come from a different origin -- drawing those onto a canvas would
+  // taint it and block the image export entirely. Pure vector shapes we
+  // draw ourselves have no such restriction.
+  // ---------------------------------------------------------------------
+  function buildSnapshotSvg(r) {
+    const W = 960, H = 720, PAD = 40, MAP_H = 460;
+    const allPts = [];
+    r.legs.forEach(l => { allPts.push(l.start, l.end); });
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    allPts.forEach(([lat, lon]) => {
+      if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
+    });
+    const latPad = Math.max((maxLat - minLat) * 0.15, 0.02);
+    const lonPad = Math.max((maxLon - minLon) * 0.15, 0.02);
+    minLat -= latPad; maxLat += latPad; minLon -= lonPad; maxLon += lonPad;
+    const midLatRad = toRad((minLat + maxLat) / 2);
+    const lonScale = Math.cos(midLatRad);
+
+    const mapW = W - PAD * 2;
+    const spanLon = (maxLon - minLon) * lonScale;
+    const spanLat = (maxLat - minLat);
+    const scale = Math.min(mapW / spanLon, MAP_H / spanLat);
+    const usedW = spanLon * scale, usedH = spanLat * scale;
+    const offX = PAD + (mapW - usedW) / 2;
+    const offY = 100 + (MAP_H - usedH) / 2;
+
+    function project(lat, lon) {
+      const x = offX + (lon - minLon) * lonScale * scale;
+      const y = offY + (maxLat - lat) * scale;
+      return [x, y];
+    }
+
+    // Land silhouette, filtered to polygons overlapping the view
+    let landPaths = '';
+    for (let i = 0; i < LAND_POLYGON_RINGS.length; i++) {
+      const [pMinLon, pMinLat, pMaxLon, pMaxLat] = LAND_POLYGON_BOUNDS[i];
+      if (pMaxLon < minLon || pMinLon > maxLon || pMaxLat < minLat || pMinLat > maxLat) continue;
+      for (const ring of LAND_POLYGON_RINGS[i]) {
+        if (ring.length < 3) continue;
+        let d = '';
+        for (let j = 0; j < ring.length; j++) {
+          const [x, y] = project(ring[j][1], ring[j][0]);
+          d += (j === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+        }
+        landPaths += `<path d="${d}Z" fill="#243943" stroke="none"/>`;
+      }
+    }
+
+    const routeLines = r.legs.map(l => {
+      const [x1, y1] = project(l.start[0], l.start[1]);
+      const [x2, y2] = project(l.end[0], l.end[1]);
+      const motoring = (l.motorFrac || 0) > 0;
+      const nogo = l.avgTwaDeg < r.noGoDeg && !motoring;
+      const color = motoring ? '#5B8AA6' : (nogo ? '#C1553B' : '#C89B3C');
+      const dash = motoring ? ' stroke-dasharray="3,7"' : '';
+      return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="3.5"${dash} stroke-linecap="round"/>`;
+    }).join('');
+
+    const [sx, sy] = project(r.legs[0].start[0], r.legs[0].start[1]);
+    const [ex, ey] = project(r.legs[r.legs.length-1].end[0], r.legs[r.legs.length-1].end[1]);
+
+    const totalNm = r.totalNm.toFixed(1);
+    const directStr = r.directNm != null ? ` (direct ${r.directNm.toFixed(1)} nm)` : '';
+    const motorH = r.legs.reduce((s,l) => s + (l.motorFrac||0) * (l.endTimeMs - l.startTimeMs), 0) / 3600000;
+    let peakWind = null, peakGust = null, peakWave = null;
+    r.legs.forEach(l => {
+      if (l.avgTwsKts != null && (!peakWind || l.avgTwsKts > peakWind)) peakWind = l.avgTwsKts;
+      if (l.maxGustKts != null && (!peakGust || l.maxGustKts > peakGust)) peakGust = l.maxGustKts;
+      if (l.avgWaveHeightM != null && (!peakWave || l.avgWaveHeightM > peakWave)) peakWave = l.avgWaveHeightM;
+    });
+    const condBits = [];
+    if (peakWind != null) condBits.push(`wind to ${peakWind.toFixed(0)}kt`);
+    if (peakGust != null && peakGust >= (peakWind||0) + 5) condBits.push(`gusts to ${peakGust.toFixed(0)}kt`);
+    if (peakWave != null) condBits.push(`waves to ${peakWave.toFixed(1)}m`);
+    if (motorH > 0.05) condBits.push(`${fmtDuration(motorH)} under motor`);
+    const condLine = condBits.length ? condBits.join('  \u00b7  ') : '';
+
+    const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+      <rect width="${W}" height="${H}" fill="#0E1B23"/>
+      <text x="${PAD}" y="42" font-family="Georgia, serif" font-size="26" fill="#C89B3C" letter-spacing="2">SET &amp; DRIFT</text>
+      <text x="${PAD}" y="66" font-family="monospace" font-size="13" fill="#7C8A90">${esc(r.boatName)}${r.motorOn ? ' \u00b7 motor-sailing on' : ''} \u00b7 ${r.routeMode === 'fastest' ? 'fastest route' : 'fixed route'}</text>
+      <rect x="${PAD}" y="90" width="${mapW}" height="${MAP_H}" fill="#16262F"/>
+      <svg x="${PAD}" y="90" width="${mapW}" height="${MAP_H}" viewBox="0 0 ${mapW} ${MAP_H}" overflow="hidden">
+        <g transform="translate(${-PAD},${-90})">
+          ${landPaths}
+          ${routeLines}
+          <circle cx="${sx}" cy="${sy}" r="7" fill="#6FBF8B" stroke="#0E1B23" stroke-width="2"/>
+          <circle cx="${ex}" cy="${ey}" r="7" fill="#C1553B" stroke="#0E1B23" stroke-width="2"/>
+        </g>
+      </svg>
+      <rect x="${PAD}" y="90" width="${mapW}" height="${MAP_H}" fill="none" stroke="#263943" stroke-width="1"/>
+      <text x="${PAD+14}" y="${90+MAP_H-16}" font-family="monospace" font-size="10" fill="#7C8A90">Coastline: OpenStreetMap (approximate, not for navigation)</text>
+
+      <text x="${PAD}" y="${90+MAP_H+42}" font-family="monospace" font-size="34" fill="#EDE6D6" font-weight="600">${esc(fmtTimeShort(r.etaMs))}</text>
+      <text x="${PAD}" y="${90+MAP_H+64}" font-family="monospace" font-size="13" fill="#7C8A90">arriving ${esc(fmtTime(r.etaMs))}</text>
+      <text x="${PAD}" y="${90+MAP_H+94}" font-family="monospace" font-size="14" fill="#EDE6D6">${totalNm} nm sailed${directStr} \u00b7 ${esc(fmtDuration(r.totalHours))} underway \u00b7 departing ${esc(fmtTime(r.startMs))}</text>
+      ${condLine ? `<text x="${PAD}" y="${90+MAP_H+120}" font-family="monospace" font-size="13" fill="#C89B3C">${esc(condLine)}</text>` : ''}
+
+      <text x="${W-PAD}" y="${H-16}" font-family="monospace" font-size="10" fill="#7C8A90" text-anchor="end">Generated ${esc(new Date().toLocaleString())} \u00b7 wind/wave data: Open-Meteo \u00b7 not for navigation</text>
+    </svg>`;
+  }
+
+  document.getElementById('snapshotBtn').addEventListener('click', () => {
+    if (!lastResult) return;
+    const btn = document.getElementById('snapshotBtn');
+    const originalLabel = btn.innerHTML;
+    try {
+      const svgStr = buildSnapshotSvg(lastResult);
+      const svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 960; canvas.height = 720;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        canvas.toBlob(blob => {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          const stamp = new Date(lastResult.startMs).toISOString().slice(0,16).replace(/[:T]/g,'-');
+          a.download = `set-and-drift-${stamp}.png`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          btn.innerHTML = originalLabel;
+        }, 'image/png');
+      };
+      img.onerror = () => {
+        showError("Couldn't render the snapshot image. Try again, or check the browser console for details.");
+        btn.innerHTML = originalLabel;
+      };
+      btn.innerHTML = '&#8987; Rendering\u2026';
+      img.src = url;
+    } catch (err) {
+      showError("Snapshot failed: " + (err.message || "unknown error"));
+      btn.innerHTML = originalLabel;
     }
   });
 
